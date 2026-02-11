@@ -1,0 +1,89 @@
+version: "3.8"
+
+services:
+  # ============================
+  # Node.js Gateway Service
+  # ============================
+  gateway:
+    build:
+      context: ./node-gateway
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"     # REST API
+      - "3001:3001"     # Webhook endpoints
+    environment:
+      - NODE_ENV=development
+      - PORT=3000
+      - WEBHOOK_PORT=3001
+      - REDIS_URL=redis://redis:6379
+      - POSTGRES_URL=postgresql://taxapp:taxapp_dev@postgres:5432/taxassistant
+      - PYTHON_GRPC_HOST=tax-engine
+      - PYTHON_GRPC_PORT=50051
+      - PYTHON_REST_URL=http://tax-engine:8000
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./node-gateway/src:/app/src
+    restart: unless-stopped
+
+  # ============================
+  # Python Tax Engine Service
+  # ============================
+  tax-engine:
+    build:
+      context: ./python-engine
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"     # REST API
+      - "50051:50051"   # gRPC
+    environment:
+      - ENVIRONMENT=development
+      - POSTGRES_URL=postgresql://taxapp:taxapp_dev@postgres:5432/taxassistant
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ============================
+  # PostgreSQL
+  # ============================
+  postgres:
+    image: postgres:16-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: taxapp
+      POSTGRES_PASSWORD: taxapp_dev
+      POSTGRES_DB: taxassistant
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U taxapp -d taxassistant"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ============================
+  # Redis
+  # ============================
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:
+  redis_data:

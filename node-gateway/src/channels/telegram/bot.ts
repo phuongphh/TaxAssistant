@@ -1,0 +1,121 @@
+import { Telegraf, Context } from 'telegraf';
+import { Update } from 'telegraf/types';
+import { config } from '../../config';
+import { logger } from '../../utils/logger';
+import {
+  ChannelAdapter,
+  IncomingMessage,
+  MessageHandler,
+  OutgoingMessage,
+} from '../types';
+import { mapTelegramMessage } from './mapper';
+
+export class TelegramAdapter implements ChannelAdapter {
+  readonly channel = 'telegram' as const;
+  private bot: Telegraf;
+  private messageHandler: MessageHandler | null = null;
+
+  constructor() {
+    this.bot = new Telegraf(config.telegram.botToken);
+  }
+
+  async initialize(): Promise<void> {
+    // Register message handler
+    this.bot.on('message', async (ctx: Context<Update.MessageUpdate>) => {
+      try {
+        const message = mapTelegramMessage(ctx);
+        if (message && this.messageHandler) {
+          await this.messageHandler(message);
+        }
+      } catch (error) {
+        logger.error('Error processing Telegram message', { error });
+      }
+    });
+
+    // Bot commands
+    this.bot.command('start', async (ctx) => {
+      await ctx.reply(
+        'Xin chào! Tôi là Trợ lý Thuế ảo. 🇻🇳\n\n' +
+        'Tôi có thể hỗ trợ bạn các vấn đề về:\n' +
+        '• Thuế GTGT (VAT)\n' +
+        '• Thuế thu nhập doanh nghiệp (CIT)\n' +
+        '• Thuế thu nhập cá nhân (PIT)\n' +
+        '• Thuế môn bài\n' +
+        '• Kê khai và nộp thuế\n\n' +
+        'Hãy gửi câu hỏi của bạn để tôi hỗ trợ!',
+      );
+    });
+
+    this.bot.command('help', async (ctx) => {
+      await ctx.reply(
+        'Các lệnh hỗ trợ:\n' +
+        '/start - Bắt đầu cuộc trò chuyện\n' +
+        '/help - Hiển thị trợ giúp\n' +
+        '/loai <SME|hogiadia|cathe> - Đặt loại khách hàng\n' +
+        '/reset - Đặt lại phiên trò chuyện\n\n' +
+        'Hoặc bạn có thể gửi trực tiếp câu hỏi về thuế.',
+      );
+    });
+
+    // Setup webhook or polling based on environment
+    if (config.app.isProduction && config.telegram.webhookUrl) {
+      await this.bot.telegram.setWebhook(config.telegram.webhookUrl, {
+        secret_token: config.telegram.webhookSecret,
+      });
+      logger.info('Telegram webhook set', { url: config.telegram.webhookUrl });
+    } else {
+      await this.bot.launch();
+      logger.info('Telegram bot started in polling mode');
+    }
+  }
+
+  onMessage(handler: MessageHandler): void {
+    this.messageHandler = handler;
+  }
+
+  async sendMessage(chatId: string, message: OutgoingMessage): Promise<void> {
+    const telegramChatId = Number(chatId);
+
+    // Send main text with quick replies if present
+    if (message.text) {
+      const keyboard = message.quickReplies?.map((qr) => [{
+        text: qr.label,
+        callback_data: qr.payload,
+      }]);
+
+      await this.bot.telegram.sendMessage(telegramChatId, message.text, {
+        parse_mode: 'HTML',
+        ...(keyboard && {
+          reply_markup: { inline_keyboard: keyboard },
+        }),
+      });
+    }
+
+    // Send attachments
+    if (message.attachments) {
+      for (const attachment of message.attachments) {
+        if (attachment.type === 'document') {
+          await this.bot.telegram.sendDocument(telegramChatId, attachment.url, {
+            caption: attachment.caption,
+          });
+        } else if (attachment.type === 'image') {
+          await this.bot.telegram.sendPhoto(telegramChatId, attachment.url, {
+            caption: attachment.caption,
+          });
+        }
+      }
+    }
+  }
+
+  /** Returns the Express webhook callback for production use */
+  getWebhookCallback() {
+    return this.bot.webhookCallback('/webhook/telegram', {
+      secretToken: config.telegram.webhookSecret,
+    });
+  }
+
+  async shutdown(): Promise<void> {
+    this.bot.stop('SIGTERM');
+    logger.info('Telegram bot stopped');
+  }
+}

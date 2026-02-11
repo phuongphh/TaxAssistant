@@ -1,0 +1,144 @@
+syntax = "proto3";
+
+package taxassistant;
+
+// ============================================
+// Tax Assistant gRPC Service Definition
+// Communication between Node.js Gateway <-> Python Engine
+// ============================================
+
+service TaxEngine {
+  // Process a user's tax-related message
+  rpc ProcessMessage(TaxRequest) returns (TaxResponse);
+
+  // Stream response for long-running tax calculations
+  rpc ProcessMessageStream(TaxRequest) returns (stream TaxStreamChunk);
+
+  // Lookup tax regulation/law
+  rpc LookupRegulation(RegulationQuery) returns (RegulationResponse);
+
+  // Process uploaded tax document (invoice, receipt, etc.)
+  rpc ProcessDocument(DocumentRequest) returns (DocumentResponse);
+}
+
+// ============================================
+// Common Types
+// ============================================
+
+enum CustomerType {
+  CUSTOMER_TYPE_UNSPECIFIED = 0;
+  SME = 1;              // Small and Medium Enterprise
+  HOUSEHOLD = 2;        // Hộ gia đình
+  INDIVIDUAL = 3;       // Cá thể kinh doanh
+}
+
+enum TaxCategory {
+  TAX_CATEGORY_UNSPECIFIED = 0;
+  VAT = 1;              // Thuế GTGT
+  CIT = 2;              // Thuế TNDN (Corporate Income Tax)
+  PIT = 3;              // Thuế TNCN (Personal Income Tax)
+  SPECIAL_CONSUMPTION = 4; // Thuế tiêu thụ đặc biệt
+  IMPORT_EXPORT = 5;    // Thuế xuất nhập khẩu
+  LICENSE = 6;          // Thuế môn bài
+  ENVIRONMENT = 7;      // Thuế bảo vệ môi trường
+}
+
+message SessionContext {
+  string session_id = 1;
+  string user_id = 2;
+  CustomerType customer_type = 3;
+  repeated string previous_topics = 4;
+  map<string, string> metadata = 5;
+}
+
+// ============================================
+// Message Processing
+// ============================================
+
+message TaxRequest {
+  string request_id = 1;
+  string message = 2;
+  SessionContext context = 3;
+  string language = 4;          // "vi" for Vietnamese
+  repeated Attachment attachments = 5;
+}
+
+message Attachment {
+  string file_id = 1;
+  string file_url = 2;
+  string mime_type = 3;
+  string filename = 4;
+}
+
+message TaxResponse {
+  string request_id = 1;
+  string reply = 2;
+  repeated SuggestedAction actions = 3;
+  repeated TaxReference references = 4;
+  float confidence = 5;
+  TaxCategory category = 6;
+}
+
+message TaxStreamChunk {
+  string request_id = 1;
+  string chunk = 2;
+  bool is_final = 3;
+  repeated SuggestedAction actions = 4;
+  repeated TaxReference references = 5;
+}
+
+message SuggestedAction {
+  string label = 1;             // Display text
+  string action_type = 2;       // "quick_reply", "link", "document_upload"
+  string payload = 3;           // Action data
+}
+
+message TaxReference {
+  string title = 1;             // e.g., "Nghị định 123/2020/NĐ-CP"
+  string url = 2;
+  string snippet = 3;
+}
+
+// ============================================
+// Regulation Lookup
+// ============================================
+
+message RegulationQuery {
+  string query = 1;
+  TaxCategory category = 2;
+  CustomerType customer_type = 3;
+  string effective_date = 4;    // ISO 8601 date
+}
+
+message RegulationResponse {
+  repeated Regulation regulations = 1;
+  string summary = 2;
+}
+
+message Regulation {
+  string document_number = 1;   // e.g., "Thông tư 78/2021/TT-BTC"
+  string title = 2;
+  string content = 3;
+  string effective_date = 4;
+  string source_url = 5;
+}
+
+// ============================================
+// Document Processing
+// ============================================
+
+message DocumentRequest {
+  string request_id = 1;
+  string file_url = 2;
+  string mime_type = 3;
+  string document_type = 4;     // "invoice", "receipt", "tax_return", etc.
+  SessionContext context = 5;
+}
+
+message DocumentResponse {
+  string request_id = 1;
+  map<string, string> extracted_data = 2;
+  string summary = 3;
+  repeated string warnings = 4;
+  repeated SuggestedAction actions = 5;
+}
