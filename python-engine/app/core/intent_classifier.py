@@ -1,13 +1,19 @@
 """
 Intent classifier for Vietnamese tax queries.
 Classifies user messages into actionable intents + tax categories.
+Integrates Vietnamese NLP for text normalization and entity extraction.
 """
 
+from __future__ import annotations
+
+import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 
 from app.core.tax_rules.base import TaxCategory
+
+logger = logging.getLogger(__name__)
 
 
 class Intent(str, Enum):
@@ -105,8 +111,18 @@ class IntentClassifier:
     """
     Hybrid intent classifier:
     - Rule-based keyword matching for fast, deterministic results
+    - Vietnamese NLP integration for text normalization and entity extraction
     - Falls back to LLM classification for ambiguous cases
     """
+
+    def __init__(self) -> None:
+        self._nlp = None
+        try:
+            from app.nlp.vietnamese import VietnameseNLP
+            self._nlp = VietnameseNLP()
+            logger.info("Vietnamese NLP module loaded")
+        except Exception:
+            logger.info("Vietnamese NLP module unavailable, using basic processing")
 
     def classify(self, text: str) -> ClassificationResult:
         """Classify user message intent using keyword patterns."""
@@ -150,22 +166,32 @@ class IntentClassifier:
         """Extract numeric entities from text (revenue, income, etc.)."""
         entities: dict = {}
 
-        # Extract money amounts (e.g., "500 triệu", "1.5 tỷ", "200000000")
-        money_patterns = [
-            (r"(\d+(?:[.,]\d+)?)\s*tỷ", 1_000_000_000),
-            (r"(\d+(?:[.,]\d+)?)\s*triệu", 1_000_000),
-            (r"(\d+(?:[.,]\d+)?)\s*nghìn", 1_000),
-            (r"(\d{6,})", 1),  # Raw number >= 6 digits
-        ]
+        # Use NLP module for richer extraction if available
+        if self._nlp:
+            amounts = self._nlp.extract_money_amounts(text)
+            if amounts:
+                entities["amount"] = amounts[0]["value"]
 
-        for pattern, multiplier in money_patterns:
-            match = re.search(pattern, text)
-            if match:
-                value = float(match.group(1).replace(",", "."))
-                entities["amount"] = value * multiplier
-                break
+            doc_refs = self._nlp.extract_tax_document_refs(text)
+            if doc_refs:
+                entities["document_refs"] = [r["full_ref"] for r in doc_refs]
+        else:
+            # Fallback: basic regex extraction
+            money_patterns = [
+                (r"(\d+(?:[.,]\d+)?)\s*tỷ", 1_000_000_000),
+                (r"(\d+(?:[.,]\d+)?)\s*triệu", 1_000_000),
+                (r"(\d+(?:[.,]\d+)?)\s*nghìn", 1_000),
+                (r"(\d{6,})", 1),  # Raw number >= 6 digits
+            ]
 
-        # Extract number of dependents
+            for pattern, multiplier in money_patterns:
+                match = re.search(pattern, text)
+                if match:
+                    value = float(match.group(1).replace(",", "."))
+                    entities["amount"] = value * multiplier
+                    break
+
+        # Extract number of dependents (always use regex, NLP doesn't handle this)
         dep_match = re.search(r"(\d+)\s*người phụ thuộc", text)
         if dep_match:
             entities["dependents"] = int(dep_match.group(1))

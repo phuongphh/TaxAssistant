@@ -53,11 +53,27 @@ _CUSTOMER_TYPE_MAP = {
 }
 
 
+def _init_rag_service():
+    """Initialize RAG service (optional, graceful fallback if unavailable)."""
+    try:
+        from app.ai.embeddings import EmbeddingService
+        from app.ai.llm_client import LLMClient
+        from app.ai.rag_service import RAGService
+
+        embedding = EmbeddingService()
+        llm = LLMClient()
+        return RAGService(embedding, llm)
+    except Exception:
+        logger.warning("RAG service unavailable - running without LLM/vector search")
+        return None
+
+
 class TaxEngineServicer(pb2_grpc.TaxEngineServicer):
     """gRPC service implementation for TaxEngine."""
 
     def __init__(self) -> None:
-        self.engine = TaxEngine()
+        self.rag_service = _init_rag_service()
+        self.engine = TaxEngine(rag_service=self.rag_service)
         self.doc_processor = DocumentProcessor()
 
     async def ProcessMessage(self, request, context):
@@ -126,13 +142,34 @@ class TaxEngineServicer(pb2_grpc.TaxEngineServicer):
             )
 
     async def LookupRegulation(self, request, context):
-        """Lookup tax regulation."""
+        """Lookup tax regulation using RAG vector search."""
         logger.info("gRPC LookupRegulation: query=%s", request.query)
 
-        # TODO: integrate with RAG service for full regulation lookup
+        if not self.rag_service:
+            return pb2.RegulationResponse(
+                regulations=[],
+                summary="Chức năng tra cứu văn bản chưa được kích hoạt (cần cấu hình LLM/ChromaDB).",
+            )
+
+        category = request.category if request.category else None
+        rag_result = await self.rag_service.query(
+            question=request.query,
+            tax_category=category,
+            n_results=request.max_results or 5,
+        )
+
+        regulations = [
+            pb2.TaxReference(
+                title=s.get("title", ""),
+                url=s.get("url", ""),
+                snippet=s.get("snippet", ""),
+            )
+            for s in rag_result.sources
+        ]
+
         return pb2.RegulationResponse(
-            regulations=[],
-            summary="Chức năng tra cứu văn bản đang được phát triển.",
+            regulations=regulations,
+            summary=rag_result.answer,
         )
 
     async def ProcessDocument(self, request, context):

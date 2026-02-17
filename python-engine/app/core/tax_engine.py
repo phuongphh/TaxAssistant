@@ -3,7 +3,10 @@ Tax Engine - Central orchestrator for tax-related queries.
 Coordinates between intent classification, tax rules, AI/RAG, and NLP.
 """
 
+from __future__ import annotations
+
 import logging
+from typing import TYPE_CHECKING
 
 from app.core.intent_classifier import ClassificationResult, Intent, IntentClassifier
 from app.core.tax_rules.base import CustomerType, TaxCategory, TaxContext, TaxResult
@@ -11,6 +14,9 @@ from app.core.tax_rules.cit import CITRule
 from app.core.tax_rules.license_tax import LicenseTaxRule
 from app.core.tax_rules.pit import PITRule
 from app.core.tax_rules.vat import VATRule
+
+if TYPE_CHECKING:
+    from app.ai.rag_service import RAGService
 
 logger = logging.getLogger(__name__)
 
@@ -26,8 +32,9 @@ class TaxEngine:
     4. Format and return response
     """
 
-    def __init__(self) -> None:
+    def __init__(self, rag_service: RAGService | None = None) -> None:
         self.classifier = IntentClassifier()
+        self.rag = rag_service
 
         # Register tax rules
         self.tax_rules = {
@@ -176,7 +183,24 @@ class TaxEngine:
     async def _handle_procedure(
         self, classification: ClassificationResult, customer_type: CustomerType, message: str
     ) -> dict:
-        """Handle procedure/process questions. TODO: integrate RAG."""
+        """Handle procedure/process questions using RAG if available."""
+        if self.rag:
+            rag_result = await self.rag.query(
+                question=message,
+                customer_type=customer_type.value,
+                tax_category="procedure",
+            )
+            if rag_result.sources:
+                references = [
+                    {"title": s["title"], "url": s.get("url", ""), "snippet": s.get("snippet", "")}
+                    for s in rag_result.sources
+                ]
+                return self._build_response(
+                    reply=rag_result.answer,
+                    classification=classification,
+                    references=references,
+                )
+
         return self._build_response(
             reply=(
                 "Về thủ tục thuế, tôi có thể hỗ trợ:\n"
@@ -193,7 +217,25 @@ class TaxEngine:
     async def _handle_declaration(
         self, classification: ClassificationResult, customer_type: CustomerType, message: str
     ) -> dict:
-        """Handle declaration/filing questions. TODO: integrate RAG."""
+        """Handle declaration/filing questions using RAG if available."""
+        if self.rag:
+            category_filter = classification.tax_category.value if classification.tax_category else "procedure"
+            rag_result = await self.rag.query(
+                question=message,
+                customer_type=customer_type.value,
+                tax_category=category_filter,
+            )
+            if rag_result.sources:
+                references = [
+                    {"title": s["title"], "url": s.get("url", ""), "snippet": s.get("snippet", "")}
+                    for s in rag_result.sources
+                ]
+                return self._build_response(
+                    reply=rag_result.answer,
+                    classification=classification,
+                    references=references,
+                )
+
         return self._build_response(
             reply=(
                 "Về kê khai thuế:\n\n"
@@ -235,9 +277,27 @@ class TaxEngine:
         self, message: str, classification: ClassificationResult, customer_type: CustomerType
     ) -> dict:
         """
-        Handle unclassified queries.
-        TODO: Use RAG pipeline to search regulations and generate answer via LLM.
+        Handle unclassified queries using RAG pipeline.
+        Falls back to suggestion-based response if RAG is unavailable.
         """
+        if self.rag:
+            category_filter = classification.tax_category.value if classification.tax_category else None
+            rag_result = await self.rag.query(
+                question=message,
+                customer_type=customer_type.value,
+                tax_category=category_filter,
+            )
+            if rag_result.confidence > 0.4 and rag_result.answer:
+                references = [
+                    {"title": s["title"], "url": s.get("url", ""), "snippet": s.get("snippet", "")}
+                    for s in rag_result.sources
+                ]
+                return self._build_response(
+                    reply=rag_result.answer,
+                    classification=classification,
+                    references=references,
+                )
+
         return self._build_response(
             reply=(
                 "Tôi hiểu câu hỏi của bạn. Để trả lời chính xác hơn, "
