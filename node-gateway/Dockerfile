@@ -2,8 +2,8 @@ FROM node:20-alpine AS builder
 
 WORKDIR /app
 
-COPY node-gateway/package.json node-gateway/package-lock.json* ./
-RUN npm ci
+COPY node-gateway/package.json ./
+RUN npm install
 
 COPY node-gateway/tsconfig.json ./
 COPY node-gateway/src/ ./src/
@@ -18,8 +18,8 @@ WORKDIR /app
 RUN addgroup -g 1001 -S appgroup && \
     adduser -S appuser -u 1001 -G appgroup
 
-COPY node-gateway/package.json node-gateway/package-lock.json* ./
-RUN npm ci --omit=dev && npm cache clean --force
+COPY node-gateway/package.json ./
+RUN npm install --omit=dev && npm cache clean --force
 
 COPY --from=builder /app/dist ./dist
 COPY proto/ /proto/
