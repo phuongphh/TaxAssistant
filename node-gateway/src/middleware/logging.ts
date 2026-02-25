@@ -11,7 +11,7 @@ export function requestLogger(req: Request, res: Response, next: NextFunction): 
   const startTime = Date.now();
 
   // Attach requestId to request object
-  (req as Record<string, unknown>).requestId = requestId;
+  (req as any).requestId = requestId;
   res.setHeader('x-request-id', requestId);
 
   // Log on response finish

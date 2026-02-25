@@ -19,7 +19,7 @@ export function createRateLimiter() {
 
     // Use Redis store for distributed rate limiting
     store: new RedisStore({
-      sendCommand: (...args: string[]) => redisClient.call(...args) as never,
+      sendCommand: (...args: string[]) => redisClient.call(args[0], ...args.slice(1)) as never,
       prefix: 'rl:',
     }),
 
