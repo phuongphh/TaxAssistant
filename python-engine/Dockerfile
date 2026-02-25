@@ -15,7 +15,7 @@ ENV PATH="/root/.cargo/bin:${PATH}"
 RUN pip install --no-cache-dir maturin
 
 COPY python-engine/requirements.txt .
-RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
 # --- Production stage ---
 FROM python:3.11-slim
@@ -29,7 +29,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     poppler-utils \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /install /usr/local
+COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
+COPY --from=builder /usr/local/bin /usr/local/bin
 
 RUN useradd -m -u 1001 appuser
 
