@@ -68,7 +68,7 @@ Virtual tax assistant for Vietnamese SMEs, households, and individual businesses
 | Tax Engine | Python 3.11+, FastAPI, SQLAlchemy |
 | Communication | gRPC (internal), REST (external) |
 | Database | PostgreSQL 16, Redis 7 |
-| AI/RAG | OpenAI GPT-4o, ChromaDB, sentence-transformers |
+| AI/RAG | Anthropic Claude, ChromaDB, sentence-transformers |
 | NLP | underthesea (Vietnamese) |
 | OCR | Tesseract (vie) |
 | Messaging | Telegraf (Telegram), Zalo OA API |
@@ -114,7 +114,7 @@ TaxAssistant/
 
 - Docker & Docker Compose
 - Telegram Bot Token (from [@BotFather](https://t.me/BotFather))
-- OpenAI API Key (for RAG/LLM features)
+- Anthropic API Key (for RAG/LLM features)
 - Zalo OA credentials (optional)
 
 ### 1. Clone and configure
@@ -129,7 +129,7 @@ cp node-gateway/.env.example node-gateway/.env
 
 # Configure Python Engine
 cp python-engine/.env.example python-engine/.env
-# Edit: OPENAI_API_KEY
+# Edit: ANTHROPIC_API_KEY
 ```
 
 ### 2. Start with Docker Compose

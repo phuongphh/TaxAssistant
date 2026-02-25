@@ -23,8 +23,8 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379"
 
     # LLM / AI
-    openai_api_key: str = ""
-    llm_model: str = "gpt-4o"
+    anthropic_api_key: str = ""
+    llm_model: str = "claude-sonnet-4-5-20250929"
     llm_temperature: float = 0.3
     embedding_model: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 

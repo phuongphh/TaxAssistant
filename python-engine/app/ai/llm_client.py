@@ -1,11 +1,11 @@
 """
 LLM client for Tax Assistant.
-Wraps OpenAI-compatible API (can be swapped for local models).
+Wraps Anthropic Claude API for tax consultation and RAG.
 """
 
 import logging
 
-from openai import AsyncOpenAI
+from anthropic import AsyncAnthropic
 
 from app.config import settings
 from app.ai.prompts import SYSTEM_PROMPT
@@ -14,10 +14,10 @@ logger = logging.getLogger(__name__)
 
 
 class LLMClient:
-    """Async LLM client using OpenAI API."""
+    """Async LLM client using Anthropic Claude API."""
 
     def __init__(self) -> None:
-        self.client = AsyncOpenAI(api_key=settings.openai_api_key)
+        self.client = AsyncAnthropic(api_key=settings.anthropic_api_key)
         self.model = settings.llm_model
         self.temperature = settings.llm_temperature
 
@@ -27,18 +27,18 @@ class LLMClient:
         system_prompt: str = SYSTEM_PROMPT,
         max_tokens: int = 1024,
     ) -> str:
-        """Generate a response from the LLM."""
+        """Generate a response from Claude."""
         try:
-            response = await self.client.chat.completions.create(
+            response = await self.client.messages.create(
                 model=self.model,
+                system=system_prompt,
                 messages=[
-                    {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
                 ],
                 temperature=self.temperature,
                 max_tokens=max_tokens,
             )
-            return response.choices[0].message.content or ""
+            return response.content[0].text
         except Exception as e:
             logger.error("LLM generation failed: %s", e)
             return "Xin lỗi, tôi gặp sự cố khi xử lý. Vui lòng thử lại."
