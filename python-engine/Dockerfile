@@ -6,7 +6,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt .
+COPY python-engine/requirements.txt .
 RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
 
 # --- Production stage ---
@@ -25,8 +25,8 @@ COPY --from=builder /install /usr/local
 
 RUN useradd -m -u 1001 appuser
 
-COPY app/ ./app/
-COPY ../proto /proto
+COPY python-engine/app/ ./app/
+COPY proto/ /proto/
 
 USER appuser
 

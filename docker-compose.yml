@@ -6,8 +6,8 @@ services:
   # ============================
   gateway:
     build:
-      context: ./node-gateway
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: node-gateway/Dockerfile
     ports:
       - "3000:3000"     # REST API
       - "3001:3001"     # Webhook endpoints
@@ -34,8 +34,8 @@ services:
   # ============================
   tax-engine:
     build:
-      context: ./python-engine
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: python-engine/Dockerfile
     ports:
       - "8000:8000"     # REST API
       - "50051:50051"   # gRPC
