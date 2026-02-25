@@ -13,7 +13,7 @@ asyncpg==0.29.0
 alembic==1.13.1
 
 # === Redis ===
-redis==5.0.7
+redis[hiredis]==5.0.7
 
 # === AI / LLM ===
 anthropic==0.52.0
