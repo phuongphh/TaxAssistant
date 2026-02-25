@@ -25,7 +25,7 @@ export function createRateLimiter() {
 
     // Custom key generator: use userId from request if available
     keyGenerator: (req) => {
-      const userId = (req as Record<string, unknown>).userId as string;
+      const userId = (req as any).userId as string;
       return userId || req.ip || 'unknown';
     },
 
