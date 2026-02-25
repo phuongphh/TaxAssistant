@@ -12,10 +12,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN curl https://sh.rustup.rs -sSf | sh -s -- -y
 ENV PATH="/root/.cargo/bin:${PATH}"
 
-RUN pip install --no-cache-dir maturin
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel maturin
 
 COPY python-engine/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --no-build-isolation -r requirements.txt
 
 # --- Production stage ---
 FROM python:3.11-slim
