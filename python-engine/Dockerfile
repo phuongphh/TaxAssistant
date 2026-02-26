@@ -35,6 +35,7 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 RUN useradd -m -u 1001 appuser
 
 COPY python-engine/app/ ./app/
+COPY python-engine/data/ ./data/
 COPY proto/ /proto/
 
 USER appuser
