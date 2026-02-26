@@ -86,7 +86,7 @@ class TaxEngine:
             return await self._handle_calculation(classification, ct)
 
         if classification.intent == Intent.TAX_INFO:
-            return await self._handle_tax_info(classification, ct)
+            return await self._handle_tax_info(classification, ct, message)
 
         if classification.intent == Intent.TAX_DEADLINE:
             return self._build_response(
@@ -160,23 +160,57 @@ class TaxEngine:
             )
 
         result = rule.calculate(context)
+
+        # Enrich with RAG-sourced legal references
+        references = [{"title": ref, "url": "", "snippet": ""} for ref in result.legal_basis]
+        if self.rag and category:
+            rag_result = await self.rag.query(
+                question=f"căn cứ pháp lý tính {category.value}",
+                customer_type=customer_type.value,
+                tax_category=category.value,
+                n_results=3,
+            )
+            for s in rag_result.sources:
+                references.append({
+                    "title": s["title"], "url": s.get("url", ""), "snippet": s.get("snippet", ""),
+                })
+
         return self._build_response(
             reply=result.explanation,
             classification=classification,
-            references=[{"title": ref, "url": "", "snippet": ""} for ref in result.legal_basis],
+            references=references,
         )
 
     async def _handle_tax_info(
-        self, classification: ClassificationResult, customer_type: CustomerType
+        self, classification: ClassificationResult, customer_type: CustomerType, message: str
     ) -> dict:
-        """Handle tax information requests."""
+        """Handle tax information requests using RAG when available."""
         category = classification.tax_category
 
+        # Try RAG first for richer, regulation-backed answers
+        if self.rag:
+            category_filter = category.value if category else None
+            rag_result = await self.rag.query(
+                question=message,
+                customer_type=customer_type.value,
+                tax_category=category_filter,
+            )
+            if rag_result.confidence > 0.4 and rag_result.answer:
+                references = [
+                    {"title": s["title"], "url": s.get("url", ""), "snippet": s.get("snippet", "")}
+                    for s in rag_result.sources
+                ]
+                return self._build_response(
+                    reply=rag_result.answer,
+                    classification=classification,
+                    references=references,
+                )
+
+        # Fallback to hardcoded rule info
         if category and category in self.tax_rules:
             info = self.tax_rules[category].get_info(customer_type)
             return self._build_response(reply=info, classification=classification)
 
-        # General tax overview
         overview = self._get_tax_overview(customer_type)
         return self._build_response(reply=overview, classification=classification)
 
@@ -252,7 +286,24 @@ class TaxEngine:
     async def _handle_penalty(
         self, classification: ClassificationResult, customer_type: CustomerType, message: str
     ) -> dict:
-        """Handle penalty-related questions."""
+        """Handle penalty-related questions using RAG when available."""
+        if self.rag:
+            rag_result = await self.rag.query(
+                question=message,
+                customer_type=customer_type.value,
+            )
+            if rag_result.confidence > 0.4 and rag_result.answer:
+                references = [
+                    {"title": s["title"], "url": s.get("url", ""), "snippet": s.get("snippet", "")}
+                    for s in rag_result.sources
+                ]
+                return self._build_response(
+                    reply=rag_result.answer,
+                    classification=classification,
+                    references=references,
+                )
+
+        # Fallback to hardcoded penalty info
         return self._build_response(
             reply=(
                 "Về xử phạt vi phạm thuế:\n\n"

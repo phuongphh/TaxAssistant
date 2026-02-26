@@ -20,11 +20,14 @@ services:
       - PYTHON_GRPC_HOST=tax-engine
       - PYTHON_GRPC_PORT=50051
       - PYTHON_REST_URL=http://tax-engine:8000
+      - TELEGRAM_BOT_TOKEN=8512160926:AAFn8CkOiZqCSV_nXO6uZSBaFOBG_66ah5g
     depends_on:
       redis:
         condition: service_healthy
       postgres:
         condition: service_healthy
+      tax-engine:
+        condition: service_started
     volumes:
       - ./node-gateway/src:/app/src
     restart: unless-stopped
