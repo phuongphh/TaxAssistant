@@ -41,7 +41,7 @@ services:
       - "50051:50051"   # gRPC
     environment:
       - ENVIRONMENT=development
-      - POSTGRES_URL=postgresql://taxapp:taxapp_dev@postgres:5432/taxassistant
+      - POSTGRES_URL=postgresql+asyncpg://taxapp:taxapp_dev@postgres:5432/taxassistant
       - REDIS_URL=redis://redis:6379
     depends_on:
       redis:

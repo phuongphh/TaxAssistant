@@ -6,7 +6,6 @@ Uses sentence-transformers with multilingual support (Vietnamese).
 import logging
 
 import chromadb
-from chromadb.config import Settings as ChromaSettings
 
 from app.config import settings
 
@@ -20,11 +19,9 @@ class EmbeddingService:
     """
 
     def __init__(self) -> None:
-        self.client = chromadb.Client(ChromaSettings(
-            chroma_db_impl="duckdb+parquet",
-            persist_directory=settings.chroma_persist_dir,
-            anonymized_telemetry=False,
-        ))
+        self.client = chromadb.PersistentClient(
+            path=settings.chroma_persist_dir,
+        )
         self.collection = self.client.get_or_create_collection(
             name="tax_regulations",
             metadata={"hnsw:space": "cosine"},
