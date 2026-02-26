@@ -80,19 +80,31 @@ class TaxEngineServicer(pb2_grpc.TaxEngineServicer):
         """Process a user's tax-related message."""
         logger.info("gRPC ProcessMessage: request_id=%s", request.request_id)
 
-        customer_type = _CUSTOMER_TYPE_MAP.get(request.context.customer_type, "unknown")
+        try:
+            customer_type = _CUSTOMER_TYPE_MAP.get(request.context.customer_type, "unknown")
 
-        session_context = {
-            "session_id": request.context.session_id,
-            "user_id": request.context.user_id,
-            "metadata": dict(request.context.metadata),
-        }
+            session_context = {
+                "session_id": request.context.session_id,
+                "user_id": request.context.user_id,
+                "metadata": dict(request.context.metadata),
+            }
 
-        result = await self.engine.process_message(
-            message=request.message,
-            customer_type=customer_type,
-            session_context=session_context,
-        )
+            result = await self.engine.process_message(
+                message=request.message,
+                customer_type=customer_type,
+                session_context=session_context,
+            )
+        except Exception as e:
+            logger.exception("ProcessMessage failed for request_id=%s: %s", request.request_id, e)
+            result = {
+                "reply": (
+                    "Xin lỗi, hệ thống đang xử lý không thành công. "
+                    "Bạn vui lòng thử lại hoặc đặt câu hỏi khác nhé."
+                ),
+                "actions": [],
+                "references": [],
+                "confidence": 0.0,
+            }
 
         # Build proto response
         actions = [

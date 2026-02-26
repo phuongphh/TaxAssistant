@@ -42,7 +42,22 @@ class RAGService:
     ) -> RAGResponse:
         """
         Process a tax question through the RAG pipeline.
+        Returns a safe fallback response if any step fails.
         """
+        try:
+            return await self._do_query(question, customer_type, tax_category, n_results)
+        except Exception as e:
+            logger.exception("RAG query failed: %s", e)
+            return RAGResponse(answer="", sources=[], confidence=0.0)
+
+    async def _do_query(
+        self,
+        question: str,
+        customer_type: str,
+        tax_category: str | None,
+        n_results: int,
+    ) -> RAGResponse:
+        """Internal RAG pipeline implementation."""
         # 1. Retrieve relevant documents
         results = self.embeddings.search(
             query=question,
@@ -79,7 +94,7 @@ class RAGService:
         )
 
         # 4. Estimate confidence based on retrieval distances
-        avg_distance = sum(d["distance"] for d in results) / len(results) if results else 1.0
+        avg_distance = sum(d.get("distance", 1.0) for d in results) / len(results)
         confidence = max(0.3, min(0.95, 1.0 - avg_distance))
 
         return RAGResponse(

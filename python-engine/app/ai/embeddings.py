@@ -64,15 +64,36 @@ class EmbeddingService:
         """
         Search for relevant documents given a query.
 
-        Returns list of dicts with keys: id, content, metadata, distance
+        Returns list of dicts with keys: id, content, metadata, distance.
+        Returns empty list on any ChromaDB error (empty collection, bad filter, etc).
         """
+        # Skip search on empty collection to avoid ChromaDB errors
+        if self.collection.count() == 0:
+            return []
+
+        # Cap n_results to actual collection size
+        doc_count = self.collection.count()
+        n_results = min(n_results, doc_count)
+
         where_filter = {"category": category_filter} if category_filter else None
 
-        results = self.collection.query(
-            query_texts=[query],
-            n_results=n_results,
-            where=where_filter,
-        )
+        try:
+            results = self.collection.query(
+                query_texts=[query],
+                n_results=n_results,
+                where=where_filter,
+            )
+        except Exception as e:
+            # where_filter may fail if metadata field doesn't exist; retry without filter
+            logger.warning("ChromaDB query with filter failed (%s), retrying without filter", e)
+            try:
+                results = self.collection.query(
+                    query_texts=[query],
+                    n_results=n_results,
+                )
+            except Exception as e2:
+                logger.error("ChromaDB query failed: %s", e2)
+                return []
 
         documents = []
         if results and results["ids"]:
