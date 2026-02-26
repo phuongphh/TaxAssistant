@@ -20,7 +20,7 @@ services:
       - PYTHON_GRPC_HOST=tax-engine
       - PYTHON_GRPC_PORT=50051
       - PYTHON_REST_URL=http://tax-engine:8000
-      - TELEGRAM_BOT_TOKEN=8512160926:AAFn8CkOiZqCSV_nXO6uZSBaFOBG_66ah5g
+      - TELEGRAM_BOT_TOKEN=8683725208:AAHZgHtFWtWUPQwdcJiLZN0CDDDSa-Gxg2c
     depends_on:
       redis:
         condition: service_healthy
