@@ -43,6 +43,8 @@ services:
       - ENVIRONMENT=development
       - POSTGRES_URL=postgresql+asyncpg://taxapp:taxapp_dev@postgres:5432/taxassistant
       - REDIS_URL=redis://redis:6379
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - CHROMA_PERSIST_DIR=/app/data/chroma
     depends_on:
       redis:
         condition: service_healthy
