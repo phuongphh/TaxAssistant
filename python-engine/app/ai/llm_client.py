@@ -13,8 +13,10 @@ from app.ai.prompts import SYSTEM_PROMPT
 
 logger = logging.getLogger(__name__)
 
-# LLM call must complete well within the gRPC deadline (15-30s)
-_LLM_TIMEOUT_SECONDS = 12
+# Anthropic API can take 15-25s for complex prompts.
+# read timeout must fit within gRPC deadline (60s) with room for retries.
+_LLM_READ_TIMEOUT = 45.0
+_LLM_CONNECT_TIMEOUT = 10.0
 
 
 class LLMClient:
@@ -28,14 +30,15 @@ class LLMClient:
             )
         self.client = AsyncAnthropic(
             api_key=settings.anthropic_api_key,
-            timeout=httpx.Timeout(_LLM_TIMEOUT_SECONDS, connect=5.0),
+            timeout=httpx.Timeout(_LLM_READ_TIMEOUT, connect=_LLM_CONNECT_TIMEOUT),
+            max_retries=0,  # no SDK retries; we handle fallback at RAG/engine level
         )
         self.model = settings.llm_model
         self.temperature = settings.llm_temperature
         logger.info(
-            "LLM client initialized (model=%s, timeout=%ds)",
+            "LLM client initialized (model=%s, read_timeout=%.0fs, max_retries=0)",
             self.model,
-            _LLM_TIMEOUT_SECONDS,
+            _LLM_READ_TIMEOUT,
         )
 
     async def generate(

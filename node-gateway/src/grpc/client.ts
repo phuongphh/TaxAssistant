@@ -107,7 +107,7 @@ export class TaxEngineClient {
 
     const startMs = Date.now();
     return new Promise((resolve, reject) => {
-      this.client.processMessage(request, { deadline: this.deadline(30000) }, (err: any, response: any) => {
+      this.client.processMessage(request, { deadline: this.deadline(60000) }, (err: any, response: any) => {
         const elapsedMs = Date.now() - startMs;
         if (err) {
           logger.error('gRPC ProcessMessage error', {
