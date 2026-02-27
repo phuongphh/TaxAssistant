@@ -105,12 +105,25 @@ export class TaxEngineClient {
       },
     };
 
+    const startMs = Date.now();
     return new Promise((resolve, reject) => {
-      this.client.processMessage(request, { deadline: this.deadline() }, (err: any, response: any) => {
+      this.client.processMessage(request, { deadline: this.deadline(30000) }, (err: any, response: any) => {
+        const elapsedMs = Date.now() - startMs;
         if (err) {
-          logger.error('gRPC ProcessMessage error', { code: err.code, message: err.message });
+          logger.error('gRPC ProcessMessage error', {
+            code: err.code,
+            message: err.message,
+            details: err.details,
+            elapsedMs,
+            requestId,
+          });
           reject(new TaxEngineError(`Tax Engine error: ${err.message}`));
         } else {
+          logger.debug('gRPC ProcessMessage OK', {
+            requestId,
+            elapsedMs,
+            replyLength: response?.reply?.length ?? 0,
+          });
           resolve(response as TaxEngineResponse);
         }
       });

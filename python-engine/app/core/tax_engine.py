@@ -61,12 +61,12 @@ class TaxEngine:
         # 1. Classify intent
         classification = self.classifier.classify(message)
         logger.info(
-            "Classified message",
-            extra={
-                "intent": classification.intent,
-                "category": classification.tax_category,
-                "confidence": classification.confidence,
-            },
+            "Classified: intent=%s category=%s confidence=%.2f rag=%s msg='%s'",
+            classification.intent.value,
+            classification.tax_category.value if classification.tax_category else "none",
+            classification.confidence,
+            "yes" if self.rag else "no",
+            message[:80],
         )
 
         # 2. Route to appropriate handler
@@ -96,6 +96,9 @@ class TaxEngine:
 
         if classification.intent == Intent.TAX_PROCEDURE:
             return await self._handle_procedure(classification, ct, message)
+
+        if classification.intent == Intent.REGISTRATION:
+            return await self._handle_registration(classification, ct, message)
 
         if classification.intent == Intent.DECLARATION:
             return await self._handle_declaration(classification, ct, message)
@@ -224,7 +227,7 @@ class TaxEngine:
                 customer_type=customer_type.value,
                 tax_category="procedure",
             )
-            if rag_result.sources:
+            if rag_result.answer and rag_result.sources:
                 references = [
                     {"title": s["title"], "url": s.get("url", ""), "snippet": s.get("snippet", "")}
                     for s in rag_result.sources
@@ -322,6 +325,84 @@ class TaxEngine:
                 "url": "",
                 "snippet": "",
             }],
+        )
+
+    async def _handle_registration(
+        self, classification: ClassificationResult, customer_type: CustomerType, message: str
+    ) -> dict:
+        """Handle tax registration questions using RAG if available."""
+        if self.rag:
+            rag_result = await self.rag.query(
+                question=message,
+                customer_type=customer_type.value,
+                tax_category="procedure",
+            )
+            if rag_result.confidence > 0.4 and rag_result.answer:
+                references = [
+                    {"title": s["title"], "url": s.get("url", ""), "snippet": s.get("snippet", "")}
+                    for s in rag_result.sources
+                ]
+                return self._build_response(
+                    reply=rag_result.answer,
+                    classification=classification,
+                    references=references,
+                )
+
+        # Hardcoded fallback for registration questions
+        if customer_type in (CustomerType.HOUSEHOLD, CustomerType.INDIVIDUAL):
+            return self._build_response(
+                reply=(
+                    "Thủ tục đăng ký thuế cho Hộ kinh doanh / Cá thể:\n\n"
+                    "1. Chuẩn bị hồ sơ:\n"
+                    "   • Tờ khai đăng ký thuế (Mẫu 03-ĐK-TCT)\n"
+                    "   • Bản sao CCCD/CMND\n"
+                    "   • Giấy chứng nhận đăng ký hộ kinh doanh\n\n"
+                    "2. Nộp hồ sơ tại Chi cục Thuế quận/huyện\n\n"
+                    "3. Thời hạn cấp MST: 3 ngày làm việc\n\n"
+                    "📎 Căn cứ: Thông tư 105/2020/TT-BTC, Luật Quản lý thuế 38/2019/QH14"
+                ),
+                classification=classification,
+                references=[{
+                    "title": "Luật Quản lý thuế 38/2019/QH14",
+                    "url": "",
+                    "snippet": "Quy định về đăng ký thuế",
+                }],
+            )
+
+        return self._build_response(
+            reply=(
+                "Thủ tục đăng ký mã số thuế cho Doanh nghiệp:\n\n"
+                "1. Hồ sơ đăng ký thuế lần đầu:\n"
+                "   • Tờ khai đăng ký thuế (Mẫu 01-ĐK-TCT)\n"
+                "   • Bản sao Giấy chứng nhận ĐKKD\n"
+                "   • Bản sao CCCD/CMND người đại diện pháp luật\n"
+                "   • Văn bản ủy quyền (nếu có)\n\n"
+                "2. Nơi nộp: Cục Thuế / Chi cục Thuế quản lý trực tiếp\n\n"
+                "3. Thời hạn:\n"
+                "   • Nộp trong 10 ngày kể từ ngày cấp ĐKKD\n"
+                "   • Cơ quan thuế cấp MST trong 3 ngày làm việc\n\n"
+                "4. Lưu ý: Doanh nghiệp đăng ký qua Cổng DVC quốc gia\n"
+                "   sẽ được cấp MST cùng lúc với ĐKKD\n\n"
+                "📎 Căn cứ: Luật Quản lý thuế 38/2019/QH14, "
+                "Thông tư 105/2020/TT-BTC"
+            ),
+            classification=classification,
+            references=[
+                {
+                    "title": "Luật Quản lý thuế 38/2019/QH14",
+                    "url": "",
+                    "snippet": "Điều 30-37: Đăng ký thuế",
+                },
+                {
+                    "title": "Thông tư 105/2020/TT-BTC",
+                    "url": "",
+                    "snippet": "Hướng dẫn đăng ký thuế",
+                },
+            ],
+            actions=[
+                {"label": "Mẫu tờ khai", "action_type": "quick_reply", "payload": "mẫu tờ khai đăng ký thuế"},
+                {"label": "Hạn nộp thuế", "action_type": "quick_reply", "payload": "hạn nộp thuế doanh nghiệp mới"},
+            ],
         )
 
     async def _handle_general_query(

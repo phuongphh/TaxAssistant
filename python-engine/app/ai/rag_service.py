@@ -59,20 +59,26 @@ class RAGService:
     ) -> RAGResponse:
         """Internal RAG pipeline implementation."""
         # 1. Retrieve relevant documents
+        logger.debug("RAG: searching ChromaDB (category=%s, n=%d)", tax_category, n_results)
         results = self.embeddings.search(
             query=question,
             n_results=n_results,
             category_filter=tax_category,
         )
+        logger.debug("RAG: ChromaDB returned %d results", len(results))
 
         if not results:
-            # No context available, generate answer from LLM knowledge only
-            answer = await self.llm.generate_with_context(
-                query=question,
-                context_documents=[],
-                customer_type=customer_type,
-            )
-            return RAGResponse(answer=answer, sources=[], confidence=0.5)
+            # No context available, try LLM knowledge only
+            try:
+                answer = await self.llm.generate_with_context(
+                    query=question,
+                    context_documents=[],
+                    customer_type=customer_type,
+                )
+                return RAGResponse(answer=answer, sources=[], confidence=0.5)
+            except Exception as e:
+                logger.warning("RAG: LLM generation without context failed: %s", e)
+                return RAGResponse(answer="", sources=[], confidence=0.0)
 
         # 2. Prepare context documents
         context_docs = []
@@ -86,12 +92,18 @@ class RAGService:
             })
 
         # 3. Generate answer with context
-        answer = await self.llm.generate_with_context(
-            query=question,
-            context_documents=context_docs,
-            customer_type=customer_type,
-            prompt_template=TAX_CONSULTATION_PROMPT,
-        )
+        try:
+            answer = await self.llm.generate_with_context(
+                query=question,
+                context_documents=context_docs,
+                customer_type=customer_type,
+                prompt_template=TAX_CONSULTATION_PROMPT,
+            )
+        except Exception as e:
+            logger.warning("RAG: LLM generation with context failed: %s", e)
+            # Return sources without LLM-generated answer so callers can still
+            # use the retrieved documents for a rule-based response.
+            return RAGResponse(answer="", sources=sources, confidence=0.3)
 
         # 4. Estimate confidence based on retrieval distances
         avg_distance = sum(d.get("distance", 1.0) for d in results) / len(results)

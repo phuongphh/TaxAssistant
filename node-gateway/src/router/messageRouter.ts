@@ -4,6 +4,7 @@ import { IncomingMessage, OutgoingMessage, ChannelAdapter } from '../channels/ty
 import { SessionManager } from '../session/manager';
 import { SessionData } from '../session/store';
 import { TaxEngineClient } from '../grpc/client';
+import { TaxEngineError, SessionError } from '../utils/errors';
 
 /**
  * Message Router - the central orchestrator
@@ -43,11 +44,13 @@ export class MessageRouter {
   private async handleMessage(message: IncomingMessage): Promise<void> {
     const requestId = uuidv4();
 
-    logger.debug('Processing message', {
+    const startMs = Date.now();
+    logger.info('Processing message', {
       requestId,
       channel: message.channel,
       userId: message.userId,
       type: message.type,
+      textPreview: message.text?.slice(0, 80),
     });
 
     try {
@@ -96,12 +99,34 @@ export class MessageRouter {
 
       // 6. Record assistant reply
       await this.sessionManager.recordAssistantReply(session.sessionId, engineResponse.reply);
-    } catch (error) {
-      logger.error('Message processing failed', { requestId, error });
-
-      await this.sendReply(message, {
-        text: 'Xin lỗi, tôi gặp sự cố khi xử lý yêu cầu của bạn. Vui lòng thử lại sau.',
+    } catch (error: any) {
+      const errorName = error?.name ?? 'UnknownError';
+      const errorMsg = error?.message ?? String(error);
+      logger.error('Message processing failed', {
+        requestId,
+        errorName,
+        errorMsg,
+        channel: message.channel,
+        userId: message.userId,
+        messagePreview: message.text?.slice(0, 80),
       });
+
+      let userMessage: string;
+      if (error instanceof TaxEngineError && errorMsg.includes('DEADLINE_EXCEEDED')) {
+        userMessage =
+          'Hệ thống đang xử lý lâu hơn dự kiến. Vui lòng thử lại hoặc đặt câu hỏi ngắn gọn hơn.';
+      } else if (error instanceof TaxEngineError) {
+        userMessage =
+          'Hệ thống tư vấn thuế tạm thời không khả dụng. Vui lòng thử lại sau ít phút.';
+      } else if (error instanceof SessionError) {
+        userMessage =
+          'Phiên làm việc gặp lỗi. Vui lòng gửi /reset để bắt đầu lại.';
+      } else {
+        userMessage =
+          'Xin lỗi, tôi gặp sự cố khi xử lý yêu cầu của bạn. Vui lòng thử lại sau.';
+      }
+
+      await this.sendReply(message, { text: userMessage });
     }
   }
 

@@ -61,10 +61,26 @@ def _init_rag_service():
         from app.ai.rag_service import RAGService
 
         embedding = EmbeddingService()
+        doc_count = embedding.get_document_count()
+        logger.info("ChromaDB initialized: %d documents in vector store", doc_count)
+        if doc_count == 0:
+            logger.warning(
+                "ChromaDB is EMPTY. Run seed_loader to index tax regulations: "
+                "docker compose exec tax-engine python -m data.seed_loader"
+            )
+
         llm = LLMClient()
-        return RAGService(embedding, llm)
-    except Exception:
-        logger.warning("RAG service unavailable - running without LLM/vector search")
+        rag = RAGService(embedding, llm)
+        logger.info("RAG service initialized successfully (LLM + ChromaDB)")
+        return rag
+    except Exception as e:
+        logger.warning(
+            "RAG service unavailable - running WITHOUT LLM/vector search. "
+            "Reason: %s: %s. "
+            "Ensure ANTHROPIC_API_KEY is set in environment.",
+            type(e).__name__,
+            e,
+        )
         return None
 
 
@@ -78,7 +94,13 @@ class TaxEngineServicer(pb2_grpc.TaxEngineServicer):
 
     async def ProcessMessage(self, request, context):
         """Process a user's tax-related message."""
-        logger.info("gRPC ProcessMessage: request_id=%s", request.request_id)
+        import time
+        start = time.monotonic()
+        logger.info(
+            "gRPC ProcessMessage: request_id=%s msg='%s'",
+            request.request_id,
+            request.message[:100],
+        )
 
         try:
             customer_type = _CUSTOMER_TYPE_MAP.get(request.context.customer_type, "unknown")
@@ -94,8 +116,22 @@ class TaxEngineServicer(pb2_grpc.TaxEngineServicer):
                 customer_type=customer_type,
                 session_context=session_context,
             )
+            elapsed = time.monotonic() - start
+            logger.info(
+                "ProcessMessage OK: request_id=%s intent=%s elapsed=%.2fs",
+                request.request_id,
+                result.get("intent", "?"),
+                elapsed,
+            )
         except Exception as e:
-            logger.exception("ProcessMessage failed for request_id=%s: %s", request.request_id, e)
+            elapsed = time.monotonic() - start
+            logger.exception(
+                "ProcessMessage FAILED: request_id=%s error=%s: %s elapsed=%.2fs",
+                request.request_id,
+                type(e).__name__,
+                e,
+                elapsed,
+            )
             result = {
                 "reply": (
                     "Xin lỗi, hệ thống đang xử lý không thành công. "
