@@ -116,7 +116,7 @@ class TaxEngineServicer(pb2_grpc.TaxEngineServicer):
                 {"role": entry.role, "content": entry.content}
                 for entry in request.conversation_history
             ]
-            logger.debug(
+            logger.info(
                 "Conversation history: %d entries for session=%s",
                 len(conversation_history),
                 request.context.session_id,

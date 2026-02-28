@@ -113,6 +113,9 @@ export class TaxEngineClient {
       conversationHistory: recentHistory,
     };
 
+    logger.info('gRPC processMessage: sending %d history entries for session=%s',
+      recentHistory.length, session.sessionId);
+
     const startMs = Date.now();
     return new Promise((resolve, reject) => {
       this.client.processMessage(request, { deadline: this.deadline(60000) }, (err: any, response: any) => {

@@ -30,6 +30,7 @@ services:
         condition: service_started
     volumes:
       - ./node-gateway/src:/app/src
+      - ./proto:/proto
     restart: unless-stopped
 
   # ============================
@@ -53,6 +54,9 @@ services:
         condition: service_healthy
       postgres:
         condition: service_healthy
+    volumes:
+      - ./python-engine/app:/app/app
+      - ./proto:/proto
     restart: unless-stopped
 
   # ============================

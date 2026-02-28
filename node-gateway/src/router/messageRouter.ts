@@ -60,6 +60,9 @@ export class MessageRouter {
         message.channel,
       );
 
+      logger.info('Session resolved: %s, history=%d entries',
+        session.sessionId, session.conversationHistory?.length ?? 0);
+
       // 2. Check for bot commands
       const commandResult = await this.handleCommand(message, session);
       if (commandResult) {
