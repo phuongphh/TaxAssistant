@@ -92,8 +92,9 @@ export class TaxEngineClient {
     message: string,
     session: SessionData,
   ): Promise<TaxEngineResponse> {
-    // Send the last 10 conversation entries so the LLM has context
-    const recentHistory = (session.conversationHistory || []).slice(-10).map((entry) => ({
+    // Send the last 6 conversation entries so the LLM has context
+    // (fewer entries = less tokens = faster LLM response)
+    const recentHistory = (session.conversationHistory || []).slice(-6).map((entry) => ({
       role: entry.role,
       content: entry.content,
       timestamp: entry.timestamp,
@@ -118,7 +119,7 @@ export class TaxEngineClient {
 
     const startMs = Date.now();
     return new Promise((resolve, reject) => {
-      this.client.processMessage(request, { deadline: this.deadline(60000) }, (err: any, response: any) => {
+      this.client.processMessage(request, { deadline: this.deadline(180000) }, (err: any, response: any) => {
         const elapsedMs = Date.now() - startMs;
         if (err) {
           logger.error('gRPC ProcessMessage error', {

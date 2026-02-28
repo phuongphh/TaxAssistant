@@ -13,9 +13,9 @@ from app.ai.prompts import SYSTEM_PROMPT
 
 logger = logging.getLogger(__name__)
 
-# Anthropic API can take 15-25s for complex prompts.
-# read timeout must fit within gRPC deadline (60s) with room for retries.
-_LLM_READ_TIMEOUT = 45.0
+# Anthropic API can take 30-60s+ for complex prompts with conversation history.
+# read timeout must fit within gRPC deadline (180s) with room for overhead.
+_LLM_READ_TIMEOUT = 120.0
 _LLM_CONNECT_TIMEOUT = 10.0
 
 
@@ -45,7 +45,7 @@ class LLMClient:
         self,
         user_prompt: str,
         system_prompt: str = SYSTEM_PROMPT,
-        max_tokens: int = 4096,
+        max_tokens: int = 2048,
         conversation_history: list[dict] | None = None,
     ) -> str:
         """Generate a response from Claude.
