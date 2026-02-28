@@ -10,6 +10,38 @@ import {
 } from '../types';
 import { mapTelegramMessage } from './mapper';
 
+const TELEGRAM_MAX_LENGTH = 4096;
+
+/**
+ * Split a long message into chunks that fit Telegram's limit.
+ * Splits at paragraph (\n\n), then line (\n), then at the hard limit.
+ */
+function splitMessage(text: string, maxLen = TELEGRAM_MAX_LENGTH): string[] {
+  if (text.length <= maxLen) return [text];
+
+  const chunks: string[] = [];
+  let remaining = text;
+
+  while (remaining.length > 0) {
+    if (remaining.length <= maxLen) {
+      chunks.push(remaining);
+      break;
+    }
+
+    // Try to split at paragraph break
+    let splitIdx = remaining.lastIndexOf('\n\n', maxLen);
+    // Fall back to line break
+    if (splitIdx <= 0) splitIdx = remaining.lastIndexOf('\n', maxLen);
+    // Last resort: hard cut at max length
+    if (splitIdx <= 0) splitIdx = maxLen;
+
+    chunks.push(remaining.slice(0, splitIdx));
+    remaining = remaining.slice(splitIdx).replace(/^\n+/, '');
+  }
+
+  return chunks;
+}
+
 export class TelegramAdapter implements ChannelAdapter {
   readonly channel = 'telegram' as const;
   private bot: Telegraf;
@@ -76,19 +108,24 @@ export class TelegramAdapter implements ChannelAdapter {
   async sendMessage(chatId: string, message: OutgoingMessage): Promise<void> {
     const telegramChatId = Number(chatId);
 
-    // Send main text with quick replies if present
+    // Split long text into multiple messages (Telegram 4096 char limit)
     if (message.text) {
+      const chunks = splitMessage(message.text);
       const keyboard = message.quickReplies?.map((qr) => [{
         text: qr.label,
         callback_data: qr.payload,
       }]);
 
-      await this.bot.telegram.sendMessage(telegramChatId, message.text, {
-        parse_mode: 'HTML',
-        ...(keyboard && {
-          reply_markup: { inline_keyboard: keyboard },
-        }),
-      });
+      for (let i = 0; i < chunks.length; i++) {
+        const isLast = i === chunks.length - 1;
+        await this.bot.telegram.sendMessage(telegramChatId, chunks[i], {
+          parse_mode: 'HTML',
+          // Attach keyboard only to the last chunk
+          ...(isLast && keyboard && {
+            reply_markup: { inline_keyboard: keyboard },
+          }),
+        });
+      }
     }
 
     // Send attachments
