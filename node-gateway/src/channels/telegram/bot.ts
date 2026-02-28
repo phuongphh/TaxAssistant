@@ -118,13 +118,32 @@ export class TelegramAdapter implements ChannelAdapter {
 
       for (let i = 0; i < chunks.length; i++) {
         const isLast = i === chunks.length - 1;
-        await this.bot.telegram.sendMessage(telegramChatId, chunks[i], {
-          parse_mode: 'HTML',
-          // Attach keyboard only to the last chunk
-          ...(isLast && keyboard && {
-            reply_markup: { inline_keyboard: keyboard },
-          }),
-        });
+        const replyMarkup = isLast && keyboard
+          ? { reply_markup: { inline_keyboard: keyboard } }
+          : {};
+
+        try {
+          // Try HTML parse mode first for nice formatting
+          await this.bot.telegram.sendMessage(telegramChatId, chunks[i], {
+            parse_mode: 'HTML',
+            ...replyMarkup,
+          });
+        } catch (htmlError: any) {
+          // If HTML parsing fails (LLM response contains <, >, & etc.),
+          // fall back to plain text
+          if (htmlError?.message?.includes("can't parse entities")) {
+            logger.warn('Telegram HTML parse failed, falling back to plain text', {
+              chatId,
+              chunkIndex: i,
+              error: htmlError.message,
+            });
+            await this.bot.telegram.sendMessage(telegramChatId, chunks[i], {
+              ...replyMarkup,
+            });
+          } else {
+            throw htmlError;
+          }
+        }
       }
     }
 
