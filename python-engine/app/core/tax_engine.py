@@ -89,6 +89,14 @@ class TaxEngine:
                 classification=classification,
             )
 
+        # When conversation history exists, route follow-up messages through
+        # LLM so the model can reference previous turns (e.g. "tôi là hộ kinh
+        # doanh" from an earlier message).  Only GREETING, HELP, TAX_CALCULATE,
+        # and TAX_DEADLINE are exempt because they don't need conversational
+        # context.
+        if history and classification.intent not in (Intent.TAX_CALCULATE, Intent.TAX_DEADLINE):
+            return await self._handle_contextual_query(message, classification, ct, history)
+
         if classification.intent == Intent.TAX_CALCULATE:
             return await self._handle_calculation(classification, ct)
 
@@ -238,7 +246,7 @@ class TaxEngine:
                 tax_category="procedure",
                 conversation_history=history,
             )
-            if rag_result.answer and rag_result.sources:
+            if rag_result.answer:
                 references = [
                     {"title": s["title"], "url": s.get("url", ""), "snippet": s.get("snippet", "")}
                     for s in rag_result.sources
@@ -275,7 +283,7 @@ class TaxEngine:
                 tax_category=category_filter,
                 conversation_history=history,
             )
-            if rag_result.sources:
+            if rag_result.answer:
                 references = [
                     {"title": s["title"], "url": s.get("url", ""), "snippet": s.get("snippet", "")}
                     for s in rag_result.sources
@@ -421,6 +429,50 @@ class TaxEngine:
                 {"label": "Hạn nộp thuế", "action_type": "quick_reply", "payload": "hạn nộp thuế doanh nghiệp mới"},
             ],
         )
+
+    async def _handle_contextual_query(
+        self, message: str, classification: ClassificationResult,
+        customer_type: CustomerType, history: list[dict],
+    ) -> dict:
+        """Handle follow-up messages using LLM with full conversation history.
+
+        When conversation history exists, we always prefer LLM over hardcoded
+        responses so the model can reference earlier context (e.g. the user
+        already said "tôi là hộ kinh doanh").
+        """
+        if self.rag:
+            category_filter = classification.tax_category.value if classification.tax_category else None
+            rag_result = await self.rag.query(
+                question=message,
+                customer_type=customer_type.value,
+                tax_category=category_filter,
+                conversation_history=history,
+            )
+            if rag_result.answer:
+                references = [
+                    {"title": s["title"], "url": s.get("url", ""), "snippet": s.get("snippet", "")}
+                    for s in rag_result.sources
+                ]
+                return self._build_response(
+                    reply=rag_result.answer,
+                    classification=classification,
+                    references=references,
+                )
+
+        # LLM unavailable or failed — fall back to intent-specific handler
+        # without history so we get the hardcoded response as last resort.
+        handler = {
+            Intent.TAX_INFO: lambda: self._handle_tax_info(classification, customer_type, message),
+            Intent.TAX_PROCEDURE: lambda: self._handle_procedure(classification, customer_type, message),
+            Intent.DECLARATION: lambda: self._handle_declaration(classification, customer_type, message),
+            Intent.REGISTRATION: lambda: self._handle_registration(classification, customer_type, message),
+            Intent.PENALTY: lambda: self._handle_penalty(classification, customer_type, message),
+        }.get(classification.intent)
+
+        if handler:
+            return await handler()
+
+        return await self._handle_general_query(message, classification, customer_type)
 
     async def _handle_general_query(
         self, message: str, classification: ClassificationResult, customer_type: CustomerType,
