@@ -49,23 +49,30 @@ class TaxEngine:
         message: str,
         customer_type: str = "unknown",
         session_context: dict | None = None,
+        conversation_history: list[dict] | None = None,
     ) -> dict:
         """
         Process a tax-related message and return a response.
+
+        Args:
+            conversation_history: List of {"role": "user"|"assistant", "content": str}
+                from previous turns in this session.
 
         Returns:
             dict with keys: reply, actions, references, confidence, category
         """
         ct = CustomerType(customer_type) if customer_type in CustomerType.__members__.values() else CustomerType.UNKNOWN
+        history = conversation_history or []
 
         # 1. Classify intent
         classification = self.classifier.classify(message)
         logger.info(
-            "Classified: intent=%s category=%s confidence=%.2f rag=%s msg='%s'",
+            "Classified: intent=%s category=%s confidence=%.2f rag=%s history=%d msg='%s'",
             classification.intent.value,
             classification.tax_category.value if classification.tax_category else "none",
             classification.confidence,
             "yes" if self.rag else "no",
+            len(history),
             message[:80],
         )
 
@@ -86,7 +93,7 @@ class TaxEngine:
             return await self._handle_calculation(classification, ct)
 
         if classification.intent == Intent.TAX_INFO:
-            return await self._handle_tax_info(classification, ct, message)
+            return await self._handle_tax_info(classification, ct, message, history)
 
         if classification.intent == Intent.TAX_DEADLINE:
             return self._build_response(
@@ -95,19 +102,19 @@ class TaxEngine:
             )
 
         if classification.intent == Intent.TAX_PROCEDURE:
-            return await self._handle_procedure(classification, ct, message)
+            return await self._handle_procedure(classification, ct, message, history)
 
         if classification.intent == Intent.REGISTRATION:
-            return await self._handle_registration(classification, ct, message)
+            return await self._handle_registration(classification, ct, message, history)
 
         if classification.intent == Intent.DECLARATION:
-            return await self._handle_declaration(classification, ct, message)
+            return await self._handle_declaration(classification, ct, message, history)
 
         if classification.intent == Intent.PENALTY:
-            return await self._handle_penalty(classification, ct, message)
+            return await self._handle_penalty(classification, ct, message, history)
 
         # Unknown intent → use RAG/LLM for general answer
-        return await self._handle_general_query(message, classification, ct)
+        return await self._handle_general_query(message, classification, ct, history)
 
     async def _handle_calculation(
         self, classification: ClassificationResult, customer_type: CustomerType
@@ -185,7 +192,8 @@ class TaxEngine:
         )
 
     async def _handle_tax_info(
-        self, classification: ClassificationResult, customer_type: CustomerType, message: str
+        self, classification: ClassificationResult, customer_type: CustomerType, message: str,
+        history: list[dict] | None = None,
     ) -> dict:
         """Handle tax information requests using RAG when available."""
         category = classification.tax_category
@@ -197,6 +205,7 @@ class TaxEngine:
                 question=message,
                 customer_type=customer_type.value,
                 tax_category=category_filter,
+                conversation_history=history,
             )
             if rag_result.confidence > 0.4 and rag_result.answer:
                 references = [
@@ -218,7 +227,8 @@ class TaxEngine:
         return self._build_response(reply=overview, classification=classification)
 
     async def _handle_procedure(
-        self, classification: ClassificationResult, customer_type: CustomerType, message: str
+        self, classification: ClassificationResult, customer_type: CustomerType, message: str,
+        history: list[dict] | None = None,
     ) -> dict:
         """Handle procedure/process questions using RAG if available."""
         if self.rag:
@@ -226,6 +236,7 @@ class TaxEngine:
                 question=message,
                 customer_type=customer_type.value,
                 tax_category="procedure",
+                conversation_history=history,
             )
             if rag_result.answer and rag_result.sources:
                 references = [
@@ -252,7 +263,8 @@ class TaxEngine:
         )
 
     async def _handle_declaration(
-        self, classification: ClassificationResult, customer_type: CustomerType, message: str
+        self, classification: ClassificationResult, customer_type: CustomerType, message: str,
+        history: list[dict] | None = None,
     ) -> dict:
         """Handle declaration/filing questions using RAG if available."""
         if self.rag:
@@ -261,6 +273,7 @@ class TaxEngine:
                 question=message,
                 customer_type=customer_type.value,
                 tax_category=category_filter,
+                conversation_history=history,
             )
             if rag_result.sources:
                 references = [
@@ -287,13 +300,15 @@ class TaxEngine:
         )
 
     async def _handle_penalty(
-        self, classification: ClassificationResult, customer_type: CustomerType, message: str
+        self, classification: ClassificationResult, customer_type: CustomerType, message: str,
+        history: list[dict] | None = None,
     ) -> dict:
         """Handle penalty-related questions using RAG when available."""
         if self.rag:
             rag_result = await self.rag.query(
                 question=message,
                 customer_type=customer_type.value,
+                conversation_history=history,
             )
             if rag_result.confidence > 0.4 and rag_result.answer:
                 references = [
@@ -328,7 +343,8 @@ class TaxEngine:
         )
 
     async def _handle_registration(
-        self, classification: ClassificationResult, customer_type: CustomerType, message: str
+        self, classification: ClassificationResult, customer_type: CustomerType, message: str,
+        history: list[dict] | None = None,
     ) -> dict:
         """Handle tax registration questions using RAG if available."""
         if self.rag:
@@ -336,6 +352,7 @@ class TaxEngine:
                 question=message,
                 customer_type=customer_type.value,
                 tax_category="procedure",
+                conversation_history=history,
             )
             if rag_result.confidence > 0.4 and rag_result.answer:
                 references = [
@@ -406,7 +423,8 @@ class TaxEngine:
         )
 
     async def _handle_general_query(
-        self, message: str, classification: ClassificationResult, customer_type: CustomerType
+        self, message: str, classification: ClassificationResult, customer_type: CustomerType,
+        history: list[dict] | None = None,
     ) -> dict:
         """
         Handle unclassified queries using RAG pipeline.
@@ -418,6 +436,7 @@ class TaxEngine:
                 question=message,
                 customer_type=customer_type.value,
                 tax_category=category_filter,
+                conversation_history=history,
             )
             if rag_result.confidence > 0.4 and rag_result.answer:
                 references = [

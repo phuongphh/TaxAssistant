@@ -111,10 +111,22 @@ class TaxEngineServicer(pb2_grpc.TaxEngineServicer):
                 "metadata": dict(request.context.metadata),
             }
 
+            # Extract conversation history from gRPC request
+            conversation_history = [
+                {"role": entry.role, "content": entry.content}
+                for entry in request.conversation_history
+            ]
+            logger.debug(
+                "Conversation history: %d entries for session=%s",
+                len(conversation_history),
+                request.context.session_id,
+            )
+
             result = await self.engine.process_message(
                 message=request.message,
                 customer_type=customer_type,
                 session_context=session_context,
+                conversation_history=conversation_history,
             )
             elapsed = time.monotonic() - start
             logger.info(

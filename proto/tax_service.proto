@@ -55,12 +55,19 @@ message SessionContext {
 // Message Processing
 // ============================================
 
+message ConversationEntry {
+  string role = 1;      // "user" or "assistant"
+  string content = 2;
+  string timestamp = 3; // ISO 8601
+}
+
 message TaxRequest {
   string request_id = 1;
   string message = 2;
   SessionContext context = 3;
   string language = 4;          // "vi" for Vietnamese
   repeated Attachment attachments = 5;
+  repeated ConversationEntry conversation_history = 6;
 }
 
 message Attachment {

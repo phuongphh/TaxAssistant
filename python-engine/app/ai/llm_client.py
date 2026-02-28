@@ -46,16 +46,24 @@ class LLMClient:
         user_prompt: str,
         system_prompt: str = SYSTEM_PROMPT,
         max_tokens: int = 1024,
+        conversation_history: list[dict] | None = None,
     ) -> str:
-        """Generate a response from Claude."""
+        """Generate a response from Claude.
+
+        Args:
+            conversation_history: Previous turns as [{"role": "user"|"assistant", "content": str}, ...].
+                These are prepended to the messages array so Claude sees the full conversation.
+        """
         try:
-            logger.debug("LLM generate: model=%s, prompt_len=%d", self.model, len(user_prompt))
+            messages = self._build_messages(conversation_history, user_prompt)
+            logger.debug(
+                "LLM generate: model=%s, turns=%d, prompt_len=%d",
+                self.model, len(messages), len(user_prompt),
+            )
             response = await self.client.messages.create(
                 model=self.model,
                 system=system_prompt,
-                messages=[
-                    {"role": "user", "content": user_prompt},
-                ],
+                messages=messages,
                 temperature=self.temperature,
                 max_tokens=max_tokens,
             )
@@ -72,6 +80,7 @@ class LLMClient:
         context_documents: list[str],
         customer_type: str = "",
         prompt_template: str = "",
+        conversation_history: list[dict] | None = None,
     ) -> str:
         """Generate a response with RAG context documents."""
         context_text = "\n\n---\n\n".join(context_documents) if context_documents else "Không có tài liệu tham khảo."
@@ -90,4 +99,46 @@ class LLMClient:
                 context_documents=context_text,
             )
 
-        return await self.generate(user_prompt)
+        return await self.generate(user_prompt, conversation_history=conversation_history)
+
+    @staticmethod
+    def _build_messages(
+        conversation_history: list[dict] | None,
+        current_prompt: str,
+    ) -> list[dict]:
+        """Build Claude messages array with conversation history.
+
+        Ensures the messages array follows Claude's alternating user/assistant
+        format and always starts with a user message.
+        """
+        messages: list[dict] = []
+
+        if conversation_history:
+            for entry in conversation_history:
+                role = entry.get("role", "")
+                content = entry.get("content", "")
+                if role in ("user", "assistant") and content:
+                    messages.append({"role": role, "content": content})
+
+            # Claude requires messages to start with "user" role.
+            # Drop leading assistant messages if any.
+            while messages and messages[0]["role"] == "assistant":
+                messages.pop(0)
+
+            # Claude requires strict alternation: merge consecutive same-role msgs.
+            merged: list[dict] = []
+            for msg in messages:
+                if merged and merged[-1]["role"] == msg["role"]:
+                    merged[-1]["content"] += "\n" + msg["content"]
+                else:
+                    merged.append(msg)
+            messages = merged
+
+        # Append current user prompt
+        if messages and messages[-1]["role"] == "user":
+            # Merge with last user message to maintain alternation
+            messages[-1]["content"] += "\n\n" + current_prompt
+        else:
+            messages.append({"role": "user", "content": current_prompt})
+
+        return messages

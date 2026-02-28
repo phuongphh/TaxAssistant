@@ -92,6 +92,13 @@ export class TaxEngineClient {
     message: string,
     session: SessionData,
   ): Promise<TaxEngineResponse> {
+    // Send the last 10 conversation entries so the LLM has context
+    const recentHistory = (session.conversationHistory || []).slice(-10).map((entry) => ({
+      role: entry.role,
+      content: entry.content,
+      timestamp: entry.timestamp,
+    }));
+
     const request = {
       requestId,
       message,
@@ -103,6 +110,7 @@ export class TaxEngineClient {
         previousTopics: [],
         metadata: session.context as Record<string, string>,
       },
+      conversationHistory: recentHistory,
     };
 
     const startMs = Date.now();

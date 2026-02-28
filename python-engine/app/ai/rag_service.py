@@ -39,13 +39,14 @@ class RAGService:
         customer_type: str = "",
         tax_category: str | None = None,
         n_results: int = 5,
+        conversation_history: list[dict] | None = None,
     ) -> RAGResponse:
         """
         Process a tax question through the RAG pipeline.
         Returns a safe fallback response if any step fails.
         """
         try:
-            return await self._do_query(question, customer_type, tax_category, n_results)
+            return await self._do_query(question, customer_type, tax_category, n_results, conversation_history)
         except Exception as e:
             logger.exception("RAG query failed: %s", e)
             return RAGResponse(answer="", sources=[], confidence=0.0)
@@ -56,6 +57,7 @@ class RAGService:
         customer_type: str,
         tax_category: str | None,
         n_results: int,
+        conversation_history: list[dict] | None = None,
     ) -> RAGResponse:
         """Internal RAG pipeline implementation."""
         # 1. Retrieve relevant documents
@@ -74,6 +76,7 @@ class RAGService:
                     query=question,
                     context_documents=[],
                     customer_type=customer_type,
+                    conversation_history=conversation_history,
                 )
                 return RAGResponse(answer=answer, sources=[], confidence=0.5)
             except Exception as e:
@@ -98,6 +101,7 @@ class RAGService:
                 context_documents=context_docs,
                 customer_type=customer_type,
                 prompt_template=TAX_CONSULTATION_PROMPT,
+                conversation_history=conversation_history,
             )
         except Exception as e:
             logger.warning("RAG: LLM generation with context failed: %s", e)
