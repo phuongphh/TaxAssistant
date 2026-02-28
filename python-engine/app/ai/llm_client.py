@@ -45,7 +45,7 @@ class LLMClient:
         self,
         user_prompt: str,
         system_prompt: str = SYSTEM_PROMPT,
-        max_tokens: int = 1024,
+        max_tokens: int = 4096,
         conversation_history: list[dict] | None = None,
     ) -> str:
         """Generate a response from Claude.
