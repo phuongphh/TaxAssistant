@@ -21,6 +21,10 @@ Virtual tax assistant for Vietnamese SMEs, households, and individual businesses
 │  │  Rate    │  │   Message    │  │
 │  │ Limiter  │  │   Router     │  │
 │  └──────────┘  └──────────────┘  │
+│  ┌──────────────────────────────┐│
+│  │  Customer Profile Resolution ││
+│  │  (gRPC → DB-backed profiles) ││
+│  └──────────────────────────────┘│
 └───────────┬──────────────────────┘
             │  gRPC / REST
             ▼
@@ -33,6 +37,14 @@ Virtual tax assistant for Vietnamese SMEs, households, and individual businesses
 │  ┌──────────┐  ┌──────────────┐  │
 │  │  AI/RAG  │  │  Vietnamese  │  │
 │  │ Pipeline │  │     NLP      │  │
+│  └──────────┘  └──────────────┘  │
+│  ┌──────────┐  ┌──────────────┐  │
+│  │Onboarding│  │ Long-term    │  │
+│  │  Flow    │  │   Memory     │  │
+│  └──────────┘  └──────────────┘  │
+│  ┌──────────┐  ┌──────────────┐  │
+│  │ Support  │  │ Conversation │  │
+│  │  Cases   │  │ Summarizer   │  │
 │  └──────────┘  └──────────────┘  │
 │  ┌──────────┐  ┌──────────────┐  │
 │  │ Document │  │    gRPC      │  │
@@ -60,6 +72,16 @@ Virtual tax assistant for Vietnamese SMEs, households, and individual businesses
 
 **Session Management** - Redis-backed conversation history with customer type tracking
 
+**Customer Profiles** - Persistent DB-backed customer profiles with business info, tax profile, and preferences (long-term memory for the bot)
+
+**Onboarding Flow** - Multi-step onboarding for new customers: welcome message with 8 service categories, customer type collection (SME/Household/Individual), business info extraction from free text
+
+**Support Case Tracking** - Tracks ongoing service requests with step-by-step workflows (8 service types: tax calculation, declaration, registration, consultation, invoice check, refund, penalty, annual settlement)
+
+**Long-term Memory** - LLM-generated conversation summaries stored in DB, customer notes, and active case context are injected into every LLM prompt for personalized responses
+
+**Scalability** - Designed for 10K to 1M+ customers with PostgreSQL JSONB fields, indexed queries, Redis caching, and connection pooling
+
 ## Tech Stack
 
 | Layer | Technology |
@@ -78,14 +100,14 @@ Virtual tax assistant for Vietnamese SMEs, households, and individual businesses
 ```
 TaxAssistant/
 ├── proto/
-│   └── tax_service.proto          # Shared gRPC contract
+│   └── tax_service.proto          # Shared gRPC contract (incl. CustomerProfile, SupportCase RPCs)
 ├── node-gateway/                  # Node.js I/O Gateway
 │   └── src/
 │       ├── channels/              # Telegram & Zalo adapters
-│       ├── session/               # Redis session store
+│       ├── session/               # Redis session store + CustomerProfile/ActiveCase types
 │       ├── middleware/             # Rate limiter, logging, errors
-│       ├── grpc/                  # gRPC client to Python engine
-│       ├── router/                # Message routing orchestrator
+│       ├── grpc/                  # gRPC client (processMessage, getOrCreateCustomer, getActiveCases)
+│       ├── router/                # Message routing with customer profile resolution
 │       ├── api/routes/            # REST health & admin endpoints
 │       └── index.ts               # Bootstrap & graceful shutdown
 ├── python-engine/                 # Python Tax Engine
@@ -93,18 +115,27 @@ TaxAssistant/
 │   │   ├── core/
 │   │   │   ├── tax_rules/         # VAT, CIT, PIT, License Tax
 │   │   │   ├── intent_classifier.py
-│   │   │   └── tax_engine.py      # Central orchestrator
-│   │   ├── ai/                    # LLM client, embeddings, RAG
+│   │   │   ├── tax_engine.py      # Central orchestrator (with memory context)
+│   │   │   ├── onboarding.py      # Multi-step onboarding flow
+│   │   │   ├── case_manager.py    # Support case lifecycle (8 service types)
+│   │   │   ├── memory.py          # Long-term memory context builder
+│   │   │   └── summarizer.py      # LLM-powered conversation summarizer
+│   │   ├── ai/                    # LLM client, embeddings, RAG (with memory_context support)
 │   │   ├── nlp/                   # Vietnamese NLP (underthesea)
 │   │   ├── documents/             # OCR & data extraction
-│   │   ├── db/                    # SQLAlchemy models & session
+│   │   ├── db/                    # SQLAlchemy models, repositories
+│   │   │   ├── models.py          # Customer, SupportCase, ConversationSummary + existing models
+│   │   │   ├── customer_repository.py
+│   │   │   ├── case_repository.py
+│   │   │   ├── summary_repository.py
+│   │   │   └── database.py        # Async engine & session factory
 │   │   ├── api/routes/            # FastAPI REST endpoints
-│   │   ├── grpc_server.py         # gRPC service implementation
+│   │   ├── grpc_server.py         # gRPC service (incl. customer/case management RPCs)
 │   │   └── main.py                # Dual server entry point
 │   ├── data/
 │   │   ├── seed/                  # 16 Vietnamese tax regulation JSONs
 │   │   └── seed_loader.py         # DB + ChromaDB seed script
-│   └── tests/                     # 203 unit tests
+│   └── tests/                     # 254 unit tests
 └── docker-compose.yml             # Full stack orchestration
 ```
 
@@ -205,6 +236,50 @@ npm run build
 | PIT | Thue TNCN | 5-35% progressive (7 brackets) | All |
 | License | Mon bai | 2-3M (enterprise) / 0-1M (household) | SME, Household, Individual |
 
+## Customer Lifecycle
+
+### Onboarding (New Customer)
+
+```
+First message → Welcome + Service Menu (8 services)
+    → Ask customer type (SME / Household / Individual)
+    → Collect business info (name, tax code, industry - from free text)
+    → Onboarding complete → Ready to serve
+```
+
+### Service Menu
+
+| # | Service | Steps |
+|---|---------|-------|
+| 1 | Tax Calculation | Identify tax type → Collect data → Calculate |
+| 2 | Tax Declaration | Identify form → Guide filling → Review & submit |
+| 3 | Tax Registration | Prepare docs → Guide submission → Track result |
+| 4 | Tax Consultation | Receive question → RAG lookup → Answer |
+| 5 | Invoice Check | Upload → OCR → Verify → Result |
+| 6 | Penalty Consultation | Describe situation → Lookup → Advise |
+| 7 | VAT Refund | Check eligibility → Prepare docs → Guide submission |
+| 8 | Annual Settlement | Identify obligations → Checklist → Guide |
+
+### Long-term Memory
+
+Customer profiles persist in PostgreSQL with JSONB fields for flexibility:
+- **tax_profile**: VAT method, registered taxes, fiscal year
+- **notes**: Bot-generated observations from conversations
+- **preferences**: Language, notification settings
+
+Conversation summaries (LLM-generated) are stored after each session and loaded as context for subsequent interactions.
+
+### Database Tables
+
+| Table | Purpose |
+|-------|---------|
+| `customers` | Persistent customer profiles (channel, business info, tax profile, notes) |
+| `support_cases` | Active/completed service requests with step tracking |
+| `conversation_summaries` | LLM-generated session summaries for long-term memory |
+| `tax_queries` | Query logs |
+| `tax_regulations` | Regulation documents for RAG |
+| `processed_documents` | OCR-processed invoices/receipts |
+
 ## Seed Data
 
 16 regulation documents covering:
@@ -220,11 +295,14 @@ npm run build
 ```bash
 cd python-engine
 pytest tests/ -v
-# 203 tests covering:
+# 254 tests covering:
 #   - Tax rules (VAT, CIT, PIT, License Tax)
 #   - Intent classifier (12 intents, 4 categories)
 #   - Tax Engine orchestration
 #   - Seed data validation & loader
+#   - Onboarding flow (welcome, type collection, info extraction)
+#   - Long-term memory context builder
+#   - Case manager (service steps, status messages)
 ```
 
 ## API Endpoints
@@ -252,10 +330,15 @@ pytest tests/ -v
 
 | RPC | Description |
 |-----|-------------|
-| `ProcessMessage` | Process tax query |
+| `ProcessMessage` | Process tax query (with customer profile + memory context) |
 | `ProcessMessageStream` | Streaming response |
 | `LookupRegulation` | RAG-powered regulation search |
 | `ProcessDocument` | OCR document processing |
+| `GetOrCreateCustomer` | Get or create persistent customer profile |
+| `UpdateCustomerProfile` | Update customer profile fields |
+| `GetActiveCases` | Get active support cases for a customer |
+| `CreateSupportCase` | Create a new support case |
+| `UpdateSupportCase` | Update case step/status |
 
 ## License
 
