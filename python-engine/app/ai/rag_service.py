@@ -40,13 +40,14 @@ class RAGService:
         tax_category: str | None = None,
         n_results: int = 5,
         conversation_history: list[dict] | None = None,
+        memory_context: str = "",
     ) -> RAGResponse:
         """
         Process a tax question through the RAG pipeline.
         Returns a safe fallback response if any step fails.
         """
         try:
-            return await self._do_query(question, customer_type, tax_category, n_results, conversation_history)
+            return await self._do_query(question, customer_type, tax_category, n_results, conversation_history, memory_context)
         except Exception as e:
             logger.exception("RAG query failed: %s", e)
             return RAGResponse(answer="", sources=[], confidence=0.0)
@@ -58,6 +59,7 @@ class RAGService:
         tax_category: str | None,
         n_results: int,
         conversation_history: list[dict] | None = None,
+        memory_context: str = "",
     ) -> RAGResponse:
         """Internal RAG pipeline implementation."""
         # 1. Retrieve relevant documents
@@ -69,6 +71,12 @@ class RAGService:
         )
         logger.debug("RAG: ChromaDB returned %d results", len(results))
 
+        # Build enhanced system prompt with memory context
+        system_prompt = None
+        if memory_context:
+            from app.ai.prompts import SYSTEM_PROMPT
+            system_prompt = SYSTEM_PROMPT + "\n\n" + memory_context
+
         if not results:
             # No context available, try LLM knowledge only
             try:
@@ -77,6 +85,7 @@ class RAGService:
                     context_documents=[],
                     customer_type=customer_type,
                     conversation_history=conversation_history,
+                    system_prompt=system_prompt,
                 )
                 return RAGResponse(answer=answer, sources=[], confidence=0.5)
             except Exception as e:
@@ -102,6 +111,7 @@ class RAGService:
                 customer_type=customer_type,
                 prompt_template=TAX_CONSULTATION_PROMPT,
                 conversation_history=conversation_history,
+                system_prompt=system_prompt,
             )
         except Exception as e:
             logger.warning("RAG: LLM generation with context failed: %s", e)

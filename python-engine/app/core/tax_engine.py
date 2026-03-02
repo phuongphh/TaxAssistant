@@ -50,6 +50,7 @@ class TaxEngine:
         customer_type: str = "unknown",
         session_context: dict | None = None,
         conversation_history: list[dict] | None = None,
+        memory_context: str = "",
     ) -> dict:
         """
         Process a tax-related message and return a response.
@@ -57,22 +58,25 @@ class TaxEngine:
         Args:
             conversation_history: List of {"role": "user"|"assistant", "content": str}
                 from previous turns in this session.
+            memory_context: Long-term memory context string to inject into LLM prompts.
 
         Returns:
             dict with keys: reply, actions, references, confidence, category
         """
         ct = CustomerType(customer_type) if customer_type in CustomerType.__members__.values() else CustomerType.UNKNOWN
         history = conversation_history or []
+        self._current_memory_context = memory_context
 
         # 1. Classify intent
         classification = self.classifier.classify(message)
         logger.info(
-            "Classified: intent=%s category=%s confidence=%.2f rag=%s history=%d msg='%s'",
+            "Classified: intent=%s category=%s confidence=%.2f rag=%s history=%d memory=%d msg='%s'",
             classification.intent.value,
             classification.tax_category.value if classification.tax_category else "none",
             classification.confidence,
             "yes" if self.rag else "no",
             len(history),
+            len(memory_context),
             message[:80],
         )
 
@@ -214,16 +218,17 @@ class TaxEngine:
                 customer_type=customer_type.value,
                 tax_category=category_filter,
                 conversation_history=history,
+                memory_context=getattr(self, "_current_memory_context", ""),
             )
             if rag_result.confidence > 0.4 and rag_result.answer:
-                references = [
+                references_list = [
                     {"title": s["title"], "url": s.get("url", ""), "snippet": s.get("snippet", "")}
                     for s in rag_result.sources
                 ]
                 return self._build_response(
                     reply=rag_result.answer,
                     classification=classification,
-                    references=references,
+                    references=references_list,
                 )
 
         # Fallback to hardcoded rule info
@@ -245,6 +250,7 @@ class TaxEngine:
                 customer_type=customer_type.value,
                 tax_category="procedure",
                 conversation_history=history,
+                memory_context=getattr(self, "_current_memory_context", ""),
             )
             if rag_result.answer:
                 references = [
@@ -282,6 +288,7 @@ class TaxEngine:
                 customer_type=customer_type.value,
                 tax_category=category_filter,
                 conversation_history=history,
+                memory_context=getattr(self, "_current_memory_context", ""),
             )
             if rag_result.answer:
                 references = [
@@ -447,6 +454,7 @@ class TaxEngine:
                 customer_type=customer_type.value,
                 tax_category=category_filter,
                 conversation_history=history,
+                memory_context=getattr(self, "_current_memory_context", ""),
             )
             if rag_result.answer:
                 references = [
@@ -489,6 +497,7 @@ class TaxEngine:
                 customer_type=customer_type.value,
                 tax_category=category_filter,
                 conversation_history=history,
+                memory_context=getattr(self, "_current_memory_context", ""),
             )
             if rag_result.confidence > 0.4 and rag_result.answer:
                 references = [

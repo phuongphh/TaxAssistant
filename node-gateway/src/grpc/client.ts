@@ -4,7 +4,7 @@ import path from 'path';
 import { config } from '../config';
 import { logger } from '../utils/logger';
 import { TaxEngineError } from '../utils/errors';
-import { SessionData } from '../session/store';
+import { SessionData, CustomerProfile, ActiveCase } from '../session/store';
 
 // Load proto definition
 const PROTO_PATH = path.resolve(__dirname, '../../../proto/tax_service.proto');
@@ -91,6 +91,9 @@ export class TaxEngineClient {
     requestId: string,
     message: string,
     session: SessionData,
+    customerProfile?: CustomerProfile,
+    activeCases?: ActiveCase[],
+    conversationSummaries?: string[],
   ): Promise<TaxEngineResponse> {
     // Send the last 6 conversation entries so the LLM has context
     // (fewer entries = less tokens = faster LLM response)
@@ -100,7 +103,7 @@ export class TaxEngineClient {
       timestamp: entry.timestamp,
     }));
 
-    const request = {
+    const request: Record<string, unknown> = {
       requestId,
       message,
       language: 'vi',
@@ -114,8 +117,48 @@ export class TaxEngineClient {
       conversationHistory: recentHistory,
     };
 
-    logger.info('gRPC processMessage: sending %d history entries for session=%s',
-      recentHistory.length, session.sessionId);
+    // Attach customer profile for long-term memory
+    if (customerProfile) {
+      request.customerProfile = {
+        customerId: customerProfile.customerId,
+        channel: customerProfile.channel,
+        channelUserId: customerProfile.channelUserId,
+        customerType: customerProfile.customerType,
+        businessName: customerProfile.businessName,
+        taxCode: customerProfile.taxCode,
+        industry: customerProfile.industry,
+        province: customerProfile.province,
+        annualRevenueRange: customerProfile.annualRevenueRange,
+        employeeCountRange: customerProfile.employeeCountRange,
+        onboardingStep: customerProfile.onboardingStep,
+        taxProfile: customerProfile.taxProfile || {},
+        recentNotes: customerProfile.recentNotes || [],
+      };
+    }
+
+    // Attach active support cases
+    if (activeCases?.length) {
+      request.activeCases = activeCases.map((c) => ({
+        caseId: c.caseId,
+        customerId: c.customerId,
+        serviceType: c.serviceType,
+        title: c.title,
+        status: c.status,
+        currentStep: c.currentStep,
+      }));
+    }
+
+    // Attach conversation summaries from long-term memory
+    if (conversationSummaries?.length) {
+      request.conversationSummaries = conversationSummaries;
+    }
+
+    logger.info('gRPC processMessage: history=%d profile=%s cases=%d session=%s',
+      recentHistory.length,
+      customerProfile ? 'yes' : 'no',
+      activeCases?.length ?? 0,
+      session.sessionId,
+    );
 
     const startMs = Date.now();
     return new Promise((resolve, reject) => {
@@ -197,6 +240,63 @@ export class TaxEngineClient {
           reject(new TaxEngineError(`Document processing error: ${err.message}`));
         } else {
           resolve(response);
+        }
+      });
+    });
+  }
+
+  /**
+   * Get or create a customer profile
+   */
+  async getOrCreateCustomer(channel: string, channelUserId: string): Promise<CustomerProfile> {
+    const request = { channel, channelUserId };
+    return new Promise((resolve, reject) => {
+      this.client.getOrCreateCustomer(request, { deadline: this.deadline(10000) }, (err: any, response: any) => {
+        if (err) {
+          logger.error('gRPC GetOrCreateCustomer error', { code: err.code, message: err.message });
+          reject(new TaxEngineError(`Customer lookup error: ${err.message}`));
+        } else {
+          resolve({
+            customerId: response.customerId || '',
+            channel: response.channel || '',
+            channelUserId: response.channelUserId || '',
+            customerType: response.customerType || 'unknown',
+            businessName: response.businessName || '',
+            taxCode: response.taxCode || '',
+            industry: response.industry || '',
+            province: response.province || '',
+            annualRevenueRange: response.annualRevenueRange || '',
+            employeeCountRange: response.employeeCountRange || '',
+            onboardingStep: response.onboardingStep || 'new',
+            taxProfile: response.taxProfile || {},
+            recentNotes: response.recentNotes || [],
+          });
+        }
+      });
+    });
+  }
+
+  /**
+   * Get active support cases for a customer
+   */
+  async getActiveCases(customerId: string): Promise<ActiveCase[]> {
+    const request = { customerId };
+    return new Promise((resolve, reject) => {
+      this.client.getActiveCases(request, { deadline: this.deadline(10000) }, (err: any, response: any) => {
+        if (err) {
+          logger.error('gRPC GetActiveCases error', { code: err.code, message: err.message });
+          // Non-critical: return empty on error
+          resolve([]);
+        } else {
+          const cases = (response.cases || []).map((c: any) => ({
+            caseId: c.caseId || '',
+            customerId: c.customerId || '',
+            serviceType: c.serviceType || '',
+            title: c.title || '',
+            status: c.status || '',
+            currentStep: c.currentStep || '',
+          }));
+          resolve(cases);
         }
       });
     });

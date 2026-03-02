@@ -3,6 +3,7 @@ gRPC server implementing the TaxEngine service defined in tax_service.proto.
 """
 
 import logging
+import uuid as uuid_mod
 from concurrent import futures
 from pathlib import Path
 
@@ -11,6 +12,14 @@ from grpc_reflection.v1alpha import reflection
 
 from app.config import settings
 from app.core.tax_engine import TaxEngine
+from app.core.memory import build_memory_context
+from app.core.onboarding import OnboardingHandler
+from app.core.case_manager import CaseManager
+from app.db.database import async_session, engine as db_engine
+from app.db.models import Base
+from app.db.customer_repository import CustomerRepository
+from app.db.case_repository import CaseRepository
+from app.db.summary_repository import SummaryRepository
 from app.documents.processor import DocumentProcessor
 
 logger = logging.getLogger(__name__)
@@ -84,6 +93,13 @@ def _init_rag_service():
         return None
 
 
+async def _ensure_tables():
+    """Create new tables if they don't exist (idempotent)."""
+    async with db_engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    logger.info("Database tables ensured")
+
+
 class TaxEngineServicer(pb2_grpc.TaxEngineServicer):
     """gRPC service implementation for TaxEngine."""
 
@@ -91,6 +107,7 @@ class TaxEngineServicer(pb2_grpc.TaxEngineServicer):
         self.rag_service = _init_rag_service()
         self.engine = TaxEngine(rag_service=self.rag_service)
         self.doc_processor = DocumentProcessor()
+        self.onboarding = OnboardingHandler()
 
     async def ProcessMessage(self, request, context):
         """Process a user's tax-related message."""
@@ -116,18 +133,71 @@ class TaxEngineServicer(pb2_grpc.TaxEngineServicer):
                 {"role": entry.role, "content": entry.content}
                 for entry in request.conversation_history
             ]
+
+            # Extract customer profile from request (if provided by gateway)
+            customer_profile = None
+            if request.HasField("customer_profile") and request.customer_profile.customer_id:
+                customer_profile = {
+                    "customer_id": request.customer_profile.customer_id,
+                    "customer_type": request.customer_profile.customer_type,
+                    "business_name": request.customer_profile.business_name,
+                    "tax_code": request.customer_profile.tax_code,
+                    "industry": request.customer_profile.industry,
+                    "province": request.customer_profile.province,
+                    "annual_revenue_range": request.customer_profile.annual_revenue_range,
+                    "onboarding_step": request.customer_profile.onboarding_step,
+                    "tax_profile": dict(request.customer_profile.tax_profile),
+                    "notes": [{"note": n} for n in request.customer_profile.recent_notes],
+                }
+                # Use customer_type from profile if available
+                if customer_profile["customer_type"] and customer_profile["customer_type"] != "unknown":
+                    customer_type = customer_profile["customer_type"]
+
+            # Extract active cases
+            active_cases = [
+                {
+                    "case_id": c.case_id,
+                    "service_type": c.service_type,
+                    "title": c.title,
+                    "status": c.status,
+                    "current_step": c.current_step,
+                }
+                for c in request.active_cases
+            ]
+
+            # Conversation summaries
+            summaries = list(request.conversation_summaries)
+
             logger.info(
-                "Conversation history: %d entries for session=%s",
+                "Context: history=%d profile=%s cases=%d summaries=%d session=%s",
                 len(conversation_history),
+                "yes" if customer_profile else "no",
+                len(active_cases),
+                len(summaries),
                 request.context.session_id,
             )
 
-            result = await self.engine.process_message(
-                message=request.message,
-                customer_type=customer_type,
-                session_context=session_context,
-                conversation_history=conversation_history,
-            )
+            # Check if customer is in onboarding flow
+            if customer_profile and customer_profile.get("onboarding_step") in ("new", "collecting_type", "collecting_info"):
+                result = await self._handle_onboarding(
+                    request, customer_profile, customer_type
+                )
+            else:
+                # Build memory context for LLM
+                memory_context = build_memory_context(
+                    customer=customer_profile,
+                    active_cases=active_cases,
+                    recent_summaries=summaries,
+                )
+
+                result = await self.engine.process_message(
+                    message=request.message,
+                    customer_type=customer_type,
+                    session_context=session_context,
+                    conversation_history=conversation_history,
+                    memory_context=memory_context,
+                )
+
             elapsed = time.monotonic() - start
             logger.info(
                 "ProcessMessage OK: request_id=%s intent=%s elapsed=%.2fs",
@@ -180,6 +250,30 @@ class TaxEngineServicer(pb2_grpc.TaxEngineServicer):
             references=references,
             confidence=result.get("confidence", 0.0),
         )
+
+    async def _handle_onboarding(self, request, customer_profile: dict, customer_type: str) -> dict:
+        """Handle messages during onboarding flow."""
+        onboarding_result = self.onboarding.process_step(customer_profile, request.message)
+
+        # Persist onboarding updates to DB
+        update_fields = onboarding_result.get("update_fields", {})
+        if update_fields:
+            try:
+                async with async_session() as session:
+                    repo = CustomerRepository(session)
+                    cid = uuid_mod.UUID(customer_profile["customer_id"])
+                    await repo.update_profile(cid, **update_fields)
+                    await session.commit()
+            except Exception as e:
+                logger.warning("Failed to save onboarding data: %s", e)
+
+        return {
+            "reply": onboarding_result["reply"],
+            "actions": onboarding_result.get("actions", []),
+            "references": [],
+            "confidence": 1.0,
+            "intent": "onboarding",
+        }
 
     async def ProcessMessageStream(self, request, context):
         """Stream response for long-running operations."""
@@ -250,8 +344,129 @@ class TaxEngineServicer(pb2_grpc.TaxEngineServicer):
         )
 
 
+    # ================================================================
+    # Customer Profile RPCs
+    # ================================================================
+
+    async def GetOrCreateCustomer(self, request, context):
+        """Get or create a customer profile."""
+        logger.info("gRPC GetOrCreateCustomer: %s/%s", request.channel, request.channel_user_id)
+        async with async_session() as session:
+            repo = CustomerRepository(session)
+            customer, is_new = await repo.get_or_create(request.channel, request.channel_user_id)
+            await session.commit()
+            return self._customer_to_proto(customer)
+
+    async def UpdateCustomerProfile(self, request, context):
+        """Update customer profile fields."""
+        logger.info("gRPC UpdateCustomerProfile: %s", request.customer_id)
+        async with async_session() as session:
+            repo = CustomerRepository(session)
+            cid = uuid_mod.UUID(request.customer_id)
+            fields = dict(request.fields)
+            customer = await repo.update_profile(cid, **fields)
+            await session.commit()
+            if not customer:
+                context.abort(grpc.StatusCode.NOT_FOUND, "Customer not found")
+            return self._customer_to_proto(customer)
+
+    # ================================================================
+    # Support Case RPCs
+    # ================================================================
+
+    async def GetActiveCases(self, request, context):
+        """Get active support cases for a customer."""
+        logger.info("gRPC GetActiveCases: customer=%s", request.customer_id)
+        async with async_session() as session:
+            repo = CaseRepository(session)
+            cid = uuid_mod.UUID(request.customer_id)
+            cases = await repo.get_active_cases(cid)
+            return pb2.ActiveCasesResponse(
+                cases=[self._case_to_proto(c) for c in cases]
+            )
+
+    async def CreateSupportCase(self, request, context):
+        """Create a new support case."""
+        logger.info("gRPC CreateSupportCase: customer=%s type=%s", request.customer_id, request.service_type)
+        async with async_session() as session:
+            repo = CaseRepository(session)
+            cid = uuid_mod.UUID(request.customer_id)
+            case = await repo.create(
+                customer_id=cid,
+                service_type=request.service_type,
+                title=request.service_type,
+                context=dict(request.context) if request.context else None,
+            )
+            await session.commit()
+            return self._case_to_proto(case)
+
+    async def UpdateSupportCase(self, request, context):
+        """Update a support case step/status."""
+        logger.info("gRPC UpdateSupportCase: case=%s", request.case_id)
+        async with async_session() as session:
+            repo = CaseRepository(session)
+            cid = uuid_mod.UUID(request.case_id)
+            step_data = dict(request.step_data) if request.step_data else None
+            case = await repo.update_step(
+                case_id=cid,
+                current_step=request.current_step,
+                step_data=step_data,
+                status=request.status if request.status else None,
+            )
+            await session.commit()
+            if not case:
+                context.abort(grpc.StatusCode.NOT_FOUND, "Case not found")
+            return self._case_to_proto(case)
+
+    # ================================================================
+    # Proto conversion helpers
+    # ================================================================
+
+    def _customer_to_proto(self, customer):
+        """Convert Customer ORM model to proto message."""
+        notes = customer.notes or []
+        recent_notes = [n.get("note", "") for n in notes[-5:]] if notes else []
+        tax_profile = customer.tax_profile or {}
+        tax_profile_str = {k: str(v) for k, v in tax_profile.items()}
+
+        return pb2.CustomerProfileMsg(
+            customer_id=str(customer.id),
+            channel=customer.channel or "",
+            channel_user_id=customer.channel_user_id or "",
+            customer_type=customer.customer_type or "unknown",
+            business_name=customer.business_name or "",
+            tax_code=customer.tax_code or "",
+            industry=customer.industry or "",
+            province=customer.province or "",
+            annual_revenue_range=customer.annual_revenue_range or "",
+            employee_count_range=customer.employee_count_range or "",
+            onboarding_step=customer.onboarding_step or "new",
+            tax_profile=tax_profile_str,
+            recent_notes=recent_notes,
+        )
+
+    def _case_to_proto(self, case):
+        """Convert SupportCase ORM model to proto message."""
+        ctx = case.context or {}
+        ctx_str = {k: str(v) for k, v in ctx.items()}
+        return pb2.SupportCaseMsg(
+            case_id=str(case.id),
+            customer_id=str(case.customer_id),
+            service_type=case.service_type or "",
+            title=case.title or "",
+            status=case.status or "",
+            current_step=case.current_step or "",
+            context=ctx_str,
+            created_at=case.created_at.isoformat() if case.created_at else "",
+            updated_at=case.updated_at.isoformat() if case.updated_at else "",
+        )
+
+
 async def serve_grpc() -> grpc.aio.Server:
     """Start the gRPC server."""
+    # Ensure database tables exist
+    await _ensure_tables()
+
     server = grpc.aio.server(futures.ThreadPoolExecutor(max_workers=10))
     pb2_grpc.add_TaxEngineServicer_to_server(TaxEngineServicer(), server)
 

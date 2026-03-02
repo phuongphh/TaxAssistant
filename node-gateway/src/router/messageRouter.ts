@@ -2,7 +2,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { logger } from '../utils/logger';
 import { IncomingMessage, OutgoingMessage, ChannelAdapter } from '../channels/types';
 import { SessionManager } from '../session/manager';
-import { SessionData } from '../session/store';
+import { SessionData, CustomerProfile, ActiveCase } from '../session/store';
 import { TaxEngineClient } from '../grpc/client';
 import { TaxEngineError, SessionError } from '../utils/errors';
 
@@ -63,26 +63,55 @@ export class MessageRouter {
       logger.info('Session resolved: %s, history=%d entries',
         session.sessionId, session.conversationHistory?.length ?? 0);
 
-      // 2. Check for bot commands
+      // 2. Resolve customer profile (persistent, DB-backed)
+      let customerProfile: CustomerProfile | undefined;
+      let activeCases: ActiveCase[] = [];
+      try {
+        customerProfile = await this.taxEngine.getOrCreateCustomer(
+          message.channel,
+          message.userId,
+        );
+        // Cache customer ID in session
+        if (customerProfile?.customerId) {
+          session.customerId = customerProfile.customerId;
+          // Sync customer type from profile → session
+          if (customerProfile.customerType && customerProfile.customerType !== 'unknown') {
+            session.customerType = customerProfile.customerType as SessionData['customerType'];
+          }
+        }
+        // Get active support cases
+        if (customerProfile?.customerId) {
+          activeCases = await this.taxEngine.getActiveCases(customerProfile.customerId);
+        }
+      } catch (profileError: any) {
+        logger.warn('Customer profile resolution failed, continuing without profile', {
+          error: profileError?.message,
+          userId: message.userId,
+        });
+      }
+
+      // 3. Check for bot commands
       const commandResult = await this.handleCommand(message, session);
       if (commandResult) {
         await this.sendReply(message, commandResult);
         return;
       }
 
-      // 3. Record user message
+      // 4. Record user message
       if (message.text) {
         await this.sessionManager.recordUserMessage(session.sessionId, message.text);
       }
 
-      // 4. Route to Tax Engine
+      // 5. Route to Tax Engine with full context
       const engineResponse = await this.taxEngine.processMessage(
         requestId,
         message.text || `[${message.type}]`,
         session,
+        customerProfile,
+        activeCases,
       );
 
-      // 5. Build and send reply
+      // 6. Build and send reply
       const reply: OutgoingMessage = {
         text: engineResponse.reply,
         quickReplies: engineResponse.actions
@@ -100,7 +129,7 @@ export class MessageRouter {
 
       await this.sendReply(message, reply);
 
-      // 6. Record assistant reply
+      // 7. Record assistant reply
       await this.sessionManager.recordAssistantReply(session.sessionId, engineResponse.reply);
     } catch (error: any) {
       const errorName = error?.name ?? 'UnknownError';

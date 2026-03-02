@@ -81,8 +81,14 @@ class LLMClient:
         customer_type: str = "",
         prompt_template: str = "",
         conversation_history: list[dict] | None = None,
+        system_prompt: str | None = None,
     ) -> str:
-        """Generate a response with RAG context documents."""
+        """Generate a response with RAG context documents.
+
+        Args:
+            system_prompt: Optional override for the system prompt (e.g. with
+                customer memory context appended).
+        """
         context_text = "\n\n---\n\n".join(context_documents) if context_documents else "Không có tài liệu tham khảo."
 
         if prompt_template:
@@ -99,7 +105,10 @@ class LLMClient:
                 context_documents=context_text,
             )
 
-        return await self.generate(user_prompt, conversation_history=conversation_history)
+        kwargs: dict = {"conversation_history": conversation_history}
+        if system_prompt:
+            kwargs["system_prompt"] = system_prompt
+        return await self.generate(user_prompt, **kwargs)
 
     @staticmethod
     def _build_messages(

@@ -19,6 +19,15 @@ service TaxEngine {
 
   // Process uploaded tax document (invoice, receipt, etc.)
   rpc ProcessDocument(DocumentRequest) returns (DocumentResponse);
+
+  // Customer profile management
+  rpc GetOrCreateCustomer(CustomerLookup) returns (CustomerProfileMsg);
+  rpc UpdateCustomerProfile(CustomerProfileUpdate) returns (CustomerProfileMsg);
+
+  // Support case management
+  rpc GetActiveCases(CustomerCaseLookup) returns (ActiveCasesResponse);
+  rpc CreateSupportCase(CreateCaseRequest) returns (SupportCaseMsg);
+  rpc UpdateSupportCase(UpdateCaseRequest) returns (SupportCaseMsg);
 }
 
 // ============================================
@@ -68,6 +77,9 @@ message TaxRequest {
   string language = 4;          // "vi" for Vietnamese
   repeated Attachment attachments = 5;
   repeated ConversationEntry conversation_history = 6;
+  CustomerProfileMsg customer_profile = 7;     // Long-term customer profile
+  repeated SupportCaseMsg active_cases = 8;     // Active support cases
+  repeated string conversation_summaries = 9;   // Recent session summaries
 }
 
 message Attachment {
@@ -148,4 +160,71 @@ message DocumentResponse {
   string summary = 3;
   repeated string warnings = 4;
   repeated SuggestedAction actions = 5;
+}
+
+// ============================================
+// Customer Profile Management
+// ============================================
+
+message CustomerProfileMsg {
+  string customer_id = 1;
+  string channel = 2;
+  string channel_user_id = 3;
+  string customer_type = 4;        // "sme" | "household" | "individual" | "unknown"
+  string business_name = 5;
+  string tax_code = 6;
+  string industry = 7;
+  string province = 8;
+  string annual_revenue_range = 9;
+  string employee_count_range = 10;
+  string onboarding_step = 11;     // "new" | "collecting_type" | "collecting_info" | "completed"
+  map<string, string> tax_profile = 12;
+  repeated string recent_notes = 13;
+}
+
+message CustomerLookup {
+  string channel = 1;
+  string channel_user_id = 2;
+}
+
+message CustomerProfileUpdate {
+  string customer_id = 1;
+  map<string, string> fields = 2;  // Key-value pairs to update
+}
+
+// ============================================
+// Support Case Management
+// ============================================
+
+message SupportCaseMsg {
+  string case_id = 1;
+  string customer_id = 2;
+  string service_type = 3;
+  string title = 4;
+  string status = 5;               // "open" | "in_progress" | "waiting_customer" | "completed" | "cancelled"
+  string current_step = 6;
+  map<string, string> context = 7;
+  string created_at = 8;
+  string updated_at = 9;
+}
+
+message CustomerCaseLookup {
+  string customer_id = 1;
+}
+
+message ActiveCasesResponse {
+  repeated SupportCaseMsg cases = 1;
+}
+
+message CreateCaseRequest {
+  string customer_id = 1;
+  string service_type = 2;
+  map<string, string> context = 3;
+}
+
+message UpdateCaseRequest {
+  string case_id = 1;
+  string current_step = 2;
+  string status = 3;
+  map<string, string> step_data = 4;
 }

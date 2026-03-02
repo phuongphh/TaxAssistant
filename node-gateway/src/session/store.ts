@@ -3,6 +3,31 @@ import { config } from '../config';
 import { logger } from '../utils/logger';
 import { SessionError } from '../utils/errors';
 
+export interface CustomerProfile {
+  customerId: string;
+  channel: string;
+  channelUserId: string;
+  customerType: string;
+  businessName: string;
+  taxCode: string;
+  industry: string;
+  province: string;
+  annualRevenueRange: string;
+  employeeCountRange: string;
+  onboardingStep: string;
+  taxProfile: Record<string, string>;
+  recentNotes: string[];
+}
+
+export interface ActiveCase {
+  caseId: string;
+  customerId: string;
+  serviceType: string;
+  title: string;
+  status: string;
+  currentStep: string;
+}
+
 export interface SessionData {
   sessionId: string;
   userId: string;
@@ -12,6 +37,8 @@ export interface SessionData {
   context: Record<string, unknown>;
   createdAt: string;
   lastActiveAt: string;
+  customerId?: string;
+  customerProfile?: CustomerProfile;
 }
 
 export interface ConversationEntry {

@@ -52,3 +52,11 @@ Hãy tóm tắt ngắn gọn:
 1. Nội dung chính
 2. Đối tượng áp dụng
 3. Điểm quan trọng cần lưu ý"""
+
+CONVERSATION_SUMMARY_PROMPT = """Hãy tóm tắt cuộc trò chuyện tư vấn thuế sau thành 2-3 câu ngắn gọn.
+Ghi nhận: nội dung chính, loại thuế đã hỏi, quyết định/hành động nếu có.
+
+Lịch sử trò chuyện:
+{conversation}
+
+Tóm tắt:"""
