@@ -45,9 +45,18 @@ class RAGService:
         """
         Process a tax question through the RAG pipeline.
         Returns a safe fallback response if any step fails.
+
+        Credit/auth errors from LLM are re-raised so callers can
+        distinguish "LLM temporarily down" from "LLM permanently broken".
         """
+        from app.ai.llm_client import LLMCreditError, LLMAuthError
+
         try:
             return await self._do_query(question, customer_type, tax_category, n_results, conversation_history, memory_context)
+        except (LLMCreditError, LLMAuthError):
+            # Permanent LLM errors: propagate so upstream can show a
+            # specific message and avoid pointless retries.
+            raise
         except Exception as e:
             logger.exception("RAG query failed: %s", e)
             return RAGResponse(answer="", sources=[], confidence=0.0)
@@ -77,6 +86,8 @@ class RAGService:
             from app.ai.prompts import SYSTEM_PROMPT
             system_prompt = SYSTEM_PROMPT + "\n\n" + memory_context
 
+        from app.ai.llm_client import LLMCreditError, LLMAuthError
+
         if not results:
             # No context available, try LLM knowledge only
             try:
@@ -88,6 +99,8 @@ class RAGService:
                     system_prompt=system_prompt,
                 )
                 return RAGResponse(answer=answer, sources=[], confidence=0.5)
+            except (LLMCreditError, LLMAuthError):
+                raise
             except Exception as e:
                 logger.warning("RAG: LLM generation without context failed: %s", e)
                 return RAGResponse(answer="", sources=[], confidence=0.0)
@@ -104,6 +117,8 @@ class RAGService:
             })
 
         # 3. Generate answer with context
+        from app.ai.llm_client import LLMCreditError, LLMAuthError
+
         try:
             answer = await self.llm.generate_with_context(
                 query=question,
@@ -113,6 +128,12 @@ class RAGService:
                 conversation_history=conversation_history,
                 system_prompt=system_prompt,
             )
+        except (LLMCreditError, LLMAuthError):
+            # Permanent errors: build a document-based fallback instead of
+            # returning empty, so the user still gets useful info.
+            logger.warning("RAG: LLM unavailable (credit/auth), returning document-based fallback")
+            fallback = self._build_document_fallback(question, sources, context_docs)
+            return RAGResponse(answer=fallback, sources=sources, confidence=0.4)
         except Exception as e:
             logger.warning("RAG: LLM generation with context failed: %s", e)
             # Return sources without LLM-generated answer so callers can still
@@ -144,6 +165,29 @@ class RAGService:
 
         self.embeddings.add_documents_batch(doc_ids, chunks, metadatas)
         logger.info("Indexed regulation: %s (%d chunks)", doc_id, len(chunks))
+
+    @staticmethod
+    def _build_document_fallback(
+        question: str,
+        sources: list[dict],
+        context_docs: list[str],
+    ) -> str:
+        """Build a readable fallback answer from retrieved documents when LLM is unavailable."""
+        header = (
+            "⚠️ Hệ thống AI tạm thời không khả dụng. "
+            "Dưới đây là các tài liệu tham khảo liên quan đến câu hỏi của bạn:\n\n"
+        )
+        parts = []
+        for i, (source, doc) in enumerate(zip(sources, context_docs), 1):
+            title = source.get("title", f"Tài liệu {i}")
+            snippet = doc[:300].strip()
+            parts.append(f"📄 **{title}**\n{snippet}...")
+
+        if not parts:
+            return header + "Không tìm thấy tài liệu phù hợp. Vui lòng thử lại sau khi hệ thống khôi phục."
+
+        footer = "\n\n💡 Để được tư vấn chi tiết hơn, vui lòng thử lại sau ít phút khi hệ thống AI khôi phục."
+        return header + "\n\n".join(parts) + footer
 
     def _chunk_text(self, text: str, chunk_size: int = 500, overlap: int = 50) -> list[str]:
         """Split text into overlapping chunks for embedding."""

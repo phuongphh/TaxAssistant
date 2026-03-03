@@ -143,21 +143,7 @@ export class MessageRouter {
         messagePreview: message.text?.slice(0, 80),
       });
 
-      let userMessage: string;
-      if (error instanceof TaxEngineError && errorMsg.includes('DEADLINE_EXCEEDED')) {
-        userMessage =
-          'Hệ thống đang xử lý lâu hơn dự kiến. Vui lòng thử lại hoặc đặt câu hỏi ngắn gọn hơn.';
-      } else if (error instanceof TaxEngineError) {
-        userMessage =
-          'Hệ thống tư vấn thuế tạm thời không khả dụng. Vui lòng thử lại sau ít phút.';
-      } else if (error instanceof SessionError) {
-        userMessage =
-          'Phiên làm việc gặp lỗi. Vui lòng gửi /reset để bắt đầu lại.';
-      } else {
-        userMessage =
-          'Xin lỗi, tôi gặp sự cố khi xử lý yêu cầu của bạn. Vui lòng thử lại sau.';
-      }
-
+      const userMessage = this.getErrorMessage(error, errorMsg);
       await this.sendReply(message, { text: userMessage });
     }
   }
@@ -209,6 +195,39 @@ export class MessageRouter {
       default:
         return null;
     }
+  }
+
+  /**
+   * Map error to a user-friendly Vietnamese message.
+   */
+  private getErrorMessage(error: any, errorMsg: string): string {
+    if (error instanceof TaxEngineError) {
+      if (errorMsg.includes('DEADLINE_EXCEEDED')) {
+        return 'Hệ thống đang xử lý lâu hơn dự kiến. Vui lòng thử lại hoặc đặt câu hỏi ngắn gọn hơn.';
+      }
+      // Check for specific LLM error keywords forwarded from Python engine
+      const msg = errorMsg.toLowerCase();
+      if (msg.includes('credit') || msg.includes('billing') || msg.includes('payment')) {
+        return (
+          '⚠️ Hệ thống AI tạm thời không khả dụng do hết hạn mức sử dụng.\n\n' +
+          'Bạn vẫn có thể sử dụng các tính năng tính thuế cơ bản (VD: "tính thuế GTGT 500 triệu").\n' +
+          'Xin lỗi vì sự bất tiện này!'
+        );
+      }
+      if (msg.includes('rate limit') || msg.includes('rate_limit')) {
+        return 'Hệ thống đang nhận nhiều yêu cầu cùng lúc. Vui lòng thử lại sau 1-2 phút.';
+      }
+      if (msg.includes('overload')) {
+        return 'Hệ thống AI đang quá tải tạm thời. Vui lòng thử lại sau ít phút.';
+      }
+      return 'Hệ thống tư vấn thuế tạm thời không khả dụng. Vui lòng thử lại sau ít phút.';
+    }
+
+    if (error instanceof SessionError) {
+      return 'Phiên làm việc gặp lỗi. Vui lòng gửi /reset để bắt đầu lại.';
+    }
+
+    return 'Xin lỗi, tôi gặp sự cố khi xử lý yêu cầu của bạn. Vui lòng thử lại sau.';
   }
 
   /**

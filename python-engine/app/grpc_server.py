@@ -214,15 +214,7 @@ class TaxEngineServicer(pb2_grpc.TaxEngineServicer):
                 e,
                 elapsed,
             )
-            result = {
-                "reply": (
-                    "Xin lỗi, hệ thống đang xử lý không thành công. "
-                    "Bạn vui lòng thử lại hoặc đặt câu hỏi khác nhé."
-                ),
-                "actions": [],
-                "references": [],
-                "confidence": 0.0,
-            }
+            result = self._build_error_result(e)
 
         # Build proto response
         actions = [
@@ -250,6 +242,59 @@ class TaxEngineServicer(pb2_grpc.TaxEngineServicer):
             references=references,
             confidence=result.get("confidence", 0.0),
         )
+
+    @staticmethod
+    def _build_error_result(error: Exception) -> dict:
+        """Build a user-facing error result with specific messaging per error type."""
+        from app.ai.llm_client import LLMCreditError, LLMAuthError, LLMRateLimitError, LLMOverloadedError, LLMError
+
+        if isinstance(error, LLMCreditError):
+            reply = (
+                "⚠️ Hệ thống AI tạm thời không khả dụng do hết hạn mức sử dụng API. "
+                "Đội ngũ kỹ thuật đã được thông báo.\n\n"
+                "Trong lúc chờ khắc phục, bạn vẫn có thể:\n"
+                "• Sử dụng các tính năng tính thuế cơ bản (VD: \"tính thuế GTGT 500 triệu\")\n"
+                "• Tra cứu hạn nộp thuế\n"
+                "• Xem thông tin thuế tổng quát\n\n"
+                "Xin lỗi vì sự bất tiện này!"
+            )
+        elif isinstance(error, LLMAuthError):
+            reply = (
+                "⚠️ Hệ thống AI gặp lỗi cấu hình. "
+                "Đội ngũ kỹ thuật đã được thông báo và đang xử lý.\n\n"
+                "Bạn vẫn có thể sử dụng các tính năng tính thuế cơ bản."
+            )
+        elif isinstance(error, LLMRateLimitError):
+            reply = (
+                "Hệ thống đang nhận nhiều yêu cầu cùng lúc. "
+                "Vui lòng thử lại sau 1-2 phút nhé."
+            )
+        elif isinstance(error, LLMOverloadedError):
+            reply = (
+                "Hệ thống AI đang quá tải tạm thời. "
+                "Vui lòng thử lại sau ít phút."
+            )
+        elif isinstance(error, LLMError):
+            reply = (
+                "Xin lỗi, hệ thống AI gặp sự cố tạm thời. "
+                "Bạn vui lòng thử lại hoặc đặt câu hỏi khác nhé."
+            )
+        else:
+            reply = (
+                "Xin lỗi, hệ thống đang xử lý không thành công. "
+                "Bạn vui lòng thử lại hoặc đặt câu hỏi khác nhé."
+            )
+
+        # Encode error_type in reply metadata so gateway can detect it
+        error_type = getattr(error, "error_type", "unknown")
+
+        return {
+            "reply": reply,
+            "actions": [],
+            "references": [],
+            "confidence": 0.0,
+            "error_type": error_type,
+        }
 
     async def _handle_onboarding(self, request, customer_profile: dict, customer_type: str) -> dict:
         """Handle messages during onboarding flow."""

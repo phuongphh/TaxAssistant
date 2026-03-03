@@ -3,9 +3,15 @@ LLM client for Tax Assistant.
 Wraps Anthropic Claude API for tax consultation and RAG.
 """
 
+import asyncio
 import logging
 
-from anthropic import AsyncAnthropic
+from anthropic import (
+    AsyncAnthropic,
+    APIStatusError,
+    AuthenticationError,
+    RateLimitError,
+)
 import httpx
 
 from app.config import settings
@@ -17,6 +23,47 @@ logger = logging.getLogger(__name__)
 # read timeout must fit within gRPC deadline (180s) with room for overhead.
 _LLM_READ_TIMEOUT = 120.0
 _LLM_CONNECT_TIMEOUT = 10.0
+
+# Retry settings for transient errors (rate limit, server errors)
+_MAX_RETRIES = 3
+_RETRY_BASE_DELAY = 2.0  # seconds, doubles each retry
+
+
+class LLMError(Exception):
+    """Base error for LLM-related failures."""
+
+    def __init__(self, message: str, error_type: str = "unknown", retryable: bool = False):
+        super().__init__(message)
+        self.error_type = error_type
+        self.retryable = retryable
+
+
+class LLMCreditError(LLMError):
+    """Raised when API credits are exhausted or billing issue occurs."""
+
+    def __init__(self, message: str = "API credit exhausted or billing issue"):
+        super().__init__(message, error_type="credit_exhausted", retryable=False)
+
+
+class LLMAuthError(LLMError):
+    """Raised when the API key is invalid or lacks permissions."""
+
+    def __init__(self, message: str = "Invalid API key or insufficient permissions"):
+        super().__init__(message, error_type="auth_error", retryable=False)
+
+
+class LLMRateLimitError(LLMError):
+    """Raised when rate-limited after exhausting retries."""
+
+    def __init__(self, message: str = "Rate limited by API after retries"):
+        super().__init__(message, error_type="rate_limited", retryable=True)
+
+
+class LLMOverloadedError(LLMError):
+    """Raised when the API is overloaded (529)."""
+
+    def __init__(self, message: str = "API is temporarily overloaded"):
+        super().__init__(message, error_type="overloaded", retryable=True)
 
 
 class LLMClient:
@@ -31,14 +78,15 @@ class LLMClient:
         self.client = AsyncAnthropic(
             api_key=settings.anthropic_api_key,
             timeout=httpx.Timeout(_LLM_READ_TIMEOUT, connect=_LLM_CONNECT_TIMEOUT),
-            max_retries=0,  # no SDK retries; we handle fallback at RAG/engine level
+            max_retries=0,  # no SDK retries; we handle retry ourselves
         )
         self.model = settings.llm_model
         self.temperature = settings.llm_temperature
         logger.info(
-            "LLM client initialized (model=%s, read_timeout=%.0fs, max_retries=0)",
+            "LLM client initialized (model=%s, read_timeout=%.0fs, max_retries=%d)",
             self.model,
             _LLM_READ_TIMEOUT,
+            _MAX_RETRIES,
         )
 
     async def generate(
@@ -53,26 +101,117 @@ class LLMClient:
         Args:
             conversation_history: Previous turns as [{"role": "user"|"assistant", "content": str}, ...].
                 These are prepended to the messages array so Claude sees the full conversation.
+
+        Raises:
+            LLMCreditError: When API credits are exhausted (HTTP 400/402).
+            LLMAuthError: When API key is invalid (HTTP 401/403).
+            LLMRateLimitError: When rate-limited after all retries (HTTP 429).
+            LLMOverloadedError: When API is overloaded after all retries (HTTP 529).
+            LLMError: For other API failures.
         """
-        try:
-            messages = self._build_messages(conversation_history, user_prompt)
-            logger.debug(
-                "LLM generate: model=%s, turns=%d, prompt_len=%d",
-                self.model, len(messages), len(user_prompt),
-            )
-            response = await self.client.messages.create(
-                model=self.model,
-                system=system_prompt,
-                messages=messages,
-                temperature=self.temperature,
-                max_tokens=max_tokens,
-            )
-            answer = response.content[0].text
-            logger.debug("LLM generate OK: response_len=%d", len(answer))
-            return answer
-        except Exception as e:
-            logger.error("LLM generation failed: %s: %s", type(e).__name__, e)
-            raise
+        messages = self._build_messages(conversation_history, user_prompt)
+        logger.debug(
+            "LLM generate: model=%s, turns=%d, prompt_len=%d",
+            self.model, len(messages), len(user_prompt),
+        )
+
+        last_error: Exception | None = None
+
+        for attempt in range(_MAX_RETRIES + 1):
+            try:
+                response = await self.client.messages.create(
+                    model=self.model,
+                    system=system_prompt,
+                    messages=messages,
+                    temperature=self.temperature,
+                    max_tokens=max_tokens,
+                )
+                answer = response.content[0].text
+                logger.debug("LLM generate OK: response_len=%d", len(answer))
+                return answer
+
+            except AuthenticationError as e:
+                logger.error("LLM auth error (status=%d): %s", e.status_code, e.message)
+                raise LLMAuthError(f"Authentication failed: {e.message}") from e
+
+            except RateLimitError as e:
+                last_error = e
+                if attempt < _MAX_RETRIES:
+                    delay = _RETRY_BASE_DELAY * (2 ** attempt)
+                    logger.warning(
+                        "LLM rate limited (attempt %d/%d), retrying in %.1fs: %s",
+                        attempt + 1, _MAX_RETRIES + 1, delay, e.message,
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+                logger.error("LLM rate limited after %d attempts: %s", _MAX_RETRIES + 1, e.message)
+                raise LLMRateLimitError(f"Rate limited after {_MAX_RETRIES + 1} attempts") from e
+
+            except APIStatusError as e:
+                # Credit/billing issues: Anthropic returns 400 with
+                # "credit balance is too low" or 402 for payment required
+                if e.status_code == 402 or (
+                    e.status_code == 400
+                    and any(
+                        keyword in e.message.lower()
+                        for keyword in ("credit", "balance", "billing", "payment", "insufficient")
+                    )
+                ):
+                    logger.error("LLM credit/billing error (status=%d): %s", e.status_code, e.message)
+                    raise LLMCreditError(f"Credit/billing issue: {e.message}") from e
+
+                # Overloaded (529)
+                if e.status_code == 529:
+                    last_error = e
+                    if attempt < _MAX_RETRIES:
+                        delay = _RETRY_BASE_DELAY * (2 ** attempt)
+                        logger.warning(
+                            "LLM overloaded (attempt %d/%d), retrying in %.1fs",
+                            attempt + 1, _MAX_RETRIES + 1, delay,
+                        )
+                        await asyncio.sleep(delay)
+                        continue
+                    logger.error("LLM overloaded after %d attempts", _MAX_RETRIES + 1)
+                    raise LLMOverloadedError() from e
+
+                # Server errors (500+): retry
+                if e.status_code >= 500:
+                    last_error = e
+                    if attempt < _MAX_RETRIES:
+                        delay = _RETRY_BASE_DELAY * (2 ** attempt)
+                        logger.warning(
+                            "LLM server error %d (attempt %d/%d), retrying in %.1fs",
+                            e.status_code, attempt + 1, _MAX_RETRIES + 1, delay,
+                        )
+                        await asyncio.sleep(delay)
+                        continue
+
+                # Non-retryable API error
+                logger.error("LLM API error (status=%d): %s", e.status_code, e.message)
+                raise LLMError(
+                    f"API error {e.status_code}: {e.message}",
+                    error_type="api_error",
+                ) from e
+
+            except httpx.TimeoutException as e:
+                last_error = e
+                if attempt < _MAX_RETRIES:
+                    delay = _RETRY_BASE_DELAY * (2 ** attempt)
+                    logger.warning(
+                        "LLM timeout (attempt %d/%d), retrying in %.1fs",
+                        attempt + 1, _MAX_RETRIES + 1, delay,
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+                logger.error("LLM timeout after %d attempts", _MAX_RETRIES + 1)
+                raise LLMError("Request timed out after retries", error_type="timeout", retryable=True) from e
+
+            except Exception as e:
+                logger.error("LLM unexpected error: %s: %s", type(e).__name__, e)
+                raise LLMError(f"Unexpected: {type(e).__name__}: {e}", error_type="unknown") from e
+
+        # Should not reach here, but just in case
+        raise LLMError(f"Failed after {_MAX_RETRIES + 1} attempts: {last_error}", error_type="exhausted_retries")
 
     async def generate_with_context(
         self,
