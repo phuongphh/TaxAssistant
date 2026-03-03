@@ -64,6 +64,39 @@ export class TelegramAdapter implements ChannelAdapter {
       }
     });
 
+    // Handle inline keyboard button clicks (callback_query)
+    this.bot.on('callback_query', async (ctx) => {
+      try {
+        // Acknowledge the callback to remove loading state on the button
+        await ctx.answerCbQuery();
+
+        const cbQuery = ctx.callbackQuery;
+        if (!('data' in cbQuery) || !cbQuery.data) return;
+
+        const from = cbQuery.from;
+        const chatId = cbQuery.message?.chat?.id;
+        if (!chatId) return;
+
+        const message: IncomingMessage = {
+          channel: 'telegram',
+          userId: String(from.id),
+          chatId: String(chatId),
+          userName: [from.first_name, from.last_name].filter(Boolean).join(' '),
+          messageId: String(cbQuery.message?.message_id ?? Date.now()),
+          timestamp: new Date(),
+          type: 'text',
+          text: cbQuery.data,
+          raw: cbQuery,
+        };
+
+        if (this.messageHandler) {
+          await this.messageHandler(message);
+        }
+      } catch (error) {
+        logger.error('Error processing Telegram callback query', { error });
+      }
+    });
+
     // Bot commands
     this.bot.command('start', async (ctx) => {
       await ctx.reply(
