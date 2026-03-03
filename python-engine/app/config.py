@@ -23,8 +23,12 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379"
 
     # LLM / AI
+    # Provider: "anthropic" or "openai_compatible" (for Z.AI, OpenRouter, etc.)
+    llm_provider: str = "openai_compatible"
     anthropic_api_key: str = ""
-    llm_model: str = "claude-sonnet-4-5-20250929"
+    openai_api_key: str = ""
+    openai_base_url: str = "https://api.z.ai/api/paas/v4/"
+    llm_model: str = "glm-5"
     llm_temperature: float = 0.3
     embedding_model: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 

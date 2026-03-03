@@ -17,6 +17,7 @@ redis[hiredis]==5.0.7
 
 # === AI / LLM ===
 anthropic==0.52.0
+openai>=1.30.0
 langchain==0.2.5
 langchain-community==0.2.5
 
