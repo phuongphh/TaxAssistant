@@ -68,9 +68,14 @@ class TaxEngine:
         history = conversation_history or []
 
         # 0. Check for numeric service selection (from onboarding menu buttons)
-        service_type = OnboardingHandler.parse_service_selection(message.strip())
-        if service_type:
-            return self._route_service_selection(service_type, ct, memory_context)
+        # Only match short messages (single number like "1"-"8") to avoid
+        # intercepting full natural-language questions that happen to contain
+        # keywords like "kê khai" or "tính thuế".
+        msg_stripped = message.strip()
+        if msg_stripped in ("1", "2", "3", "4", "5", "6", "7", "8"):
+            service_type = OnboardingHandler.parse_service_selection(msg_stripped)
+            if service_type:
+                return self._route_service_selection(service_type, ct, memory_context)
 
         # 1. Classify intent
         classification = self.classifier.classify(message)
@@ -430,17 +435,50 @@ class TaxEngine:
                     references=references,
                 )
 
+        # Provide process-oriented answer (not just forms list)
+        if customer_type in (CustomerType.HOUSEHOLD, CustomerType.INDIVIDUAL):
+            reply = (
+                "Quy trình kê khai thuế cho Hộ kinh doanh / Cá nhân:\n\n"
+                "📋 Bước 1: Xác định phương pháp tính thuế\n"
+                "• Khoán: doanh thu ≤ 100 triệu/năm (miễn thuế GTGT, TNCN)\n"
+                "• Khoán: DT > 100 triệu → thuế GTGT 1-5%, TNCN 0.5-2%\n\n"
+                "📋 Bước 2: Chuẩn bị hồ sơ kê khai\n"
+                "• Tờ khai thuế khoán (Mẫu 01/CNKD)\n"
+                "• Sổ sách, hóa đơn bán hàng\n\n"
+                "📋 Bước 3: Nộp tờ khai\n"
+                "• Kê khai qua eTax Mobile hoặc thuedientu.gdt.gov.vn\n"
+                "• Hoặc nộp trực tiếp tại Chi cục Thuế\n\n"
+                "📋 Bước 4: Nộp thuế\n"
+                "• Hạn nộp: theo quý (ngày cuối tháng đầu quý sau)\n"
+                "• Quyết toán năm: trước 31/03 năm sau\n\n"
+                "📎 Căn cứ: Thông tư 40/2021/TT-BTC"
+            )
+        else:
+            reply = (
+                "Quy trình kê khai thuế cho Doanh nghiệp:\n\n"
+                "📋 Bước 1: Đăng ký phương pháp tính thuế GTGT\n"
+                "• Khấu trừ (DT > 1 tỷ/năm) hoặc Trực tiếp\n\n"
+                "📋 Bước 2: Kê khai thuế hàng tháng/quý\n"
+                "• Thuế GTGT: Mẫu 01/GTGT (hạn ngày 20 tháng sau hoặc cuối tháng đầu quý sau)\n"
+                "• Thuế TNCN: Mẫu 05/KK-TNCN (nếu có khấu trừ)\n"
+                "• Thuế TNDN: tạm tính quý (không cần nộp tờ khai từ 2021)\n\n"
+                "📋 Bước 3: Quyết toán thuế năm\n"
+                "• Hạn: 90 ngày kể từ kết thúc năm tài chính (thường 31/03)\n"
+                "• Mẫu 03/TNDN (quyết toán TNDN)\n"
+                "• Mẫu 05/QTT-TNCN (quyết toán TNCN)\n\n"
+                "📋 Bước 4: Nộp thuế\n"
+                "• Nộp qua ngân hàng hoặc Kho bạc Nhà nước\n"
+                "• Kê khai qua thuedientu.gdt.gov.vn hoặc phần mềm HTKK\n\n"
+                "📎 Căn cứ: Luật Quản lý thuế 38/2019, Nghị định 126/2020"
+            )
+
         return self._build_response(
-            reply=(
-                "Về kê khai thuế:\n\n"
-                "📋 Các tờ khai phổ biến:\n"
-                "• Mẫu 01/GTGT - Tờ khai thuế GTGT (hàng tháng/quý)\n"
-                "• Mẫu 03/TNDN - Tờ khai tạm tính thuế TNDN (quý)\n"
-                "• Mẫu 02/KK-TNCN - Tờ khai thuế TNCN\n"
-                "• Mẫu 01/MBAI - Tờ khai thuế môn bài\n\n"
-                "Bạn muốn tìm hiểu về tờ khai nào?"
-            ),
+            reply=reply,
             classification=classification,
+            actions=[
+                {"label": "Hạn nộp thuế", "action_type": "quick_reply", "payload": "hạn nộp thuế"},
+                {"label": "Tính thuế", "action_type": "quick_reply", "payload": "tính thuế"},
+            ],
         )
 
     async def _handle_penalty(
