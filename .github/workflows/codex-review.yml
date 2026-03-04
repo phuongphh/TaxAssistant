@@ -19,7 +19,7 @@ jobs:
           
       - name: Install dependencies
         run: |
-          pip install openai
+          pip install -r requirements.txt
 
       - name: Run Codex Review
         env:
