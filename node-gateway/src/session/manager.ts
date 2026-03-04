@@ -64,6 +64,13 @@ export class SessionManager {
   }
 
   /**
+   * Save session data to Redis (persist in-memory changes).
+   */
+  async saveSession(session: SessionData): Promise<void> {
+    await this.store.save(session);
+  }
+
+  /**
    * Get session data (for routing decisions, context building, etc.)
    */
   async getSession(sessionId: string): Promise<SessionData | null> {

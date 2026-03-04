@@ -303,14 +303,27 @@ class TaxEngineServicer(pb2_grpc.TaxEngineServicer):
         # Persist onboarding updates to DB
         update_fields = onboarding_result.get("update_fields", {})
         if update_fields:
-            try:
-                async with async_session() as session:
-                    repo = CustomerRepository(session)
-                    cid = uuid_mod.UUID(customer_profile["customer_id"])
-                    await repo.update_profile(cid, **update_fields)
-                    await session.commit()
-            except Exception as e:
-                logger.warning("Failed to save onboarding data: %s", e)
+            saved = False
+            for attempt in range(3):
+                try:
+                    async with async_session() as session:
+                        repo = CustomerRepository(session)
+                        cid = uuid_mod.UUID(customer_profile["customer_id"])
+                        await repo.update_profile(cid, **update_fields)
+                        await session.commit()
+                    saved = True
+                    break
+                except Exception as e:
+                    logger.warning(
+                        "Failed to save onboarding data (attempt %d/3): %s", attempt + 1, e
+                    )
+            if not saved:
+                logger.error(
+                    "Onboarding DB update failed after 3 attempts for customer %s, "
+                    "fields=%s — user will see a stale onboarding step on next message",
+                    customer_profile.get("customer_id"),
+                    list(update_fields.keys()),
+                )
 
         return {
             "reply": onboarding_result["reply"],

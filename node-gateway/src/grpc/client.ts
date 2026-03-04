@@ -95,9 +95,9 @@ export class TaxEngineClient {
     activeCases?: ActiveCase[],
     conversationSummaries?: string[],
   ): Promise<TaxEngineResponse> {
-    // Send the last 6 conversation entries so the LLM has context
-    // (fewer entries = less tokens = faster LLM response)
-    const recentHistory = (session.conversationHistory || []).slice(-6).map((entry) => ({
+    // Send the last 10 conversation entries (5 turns) so the LLM has
+    // enough context to remember earlier information like customer type.
+    const recentHistory = (session.conversationHistory || []).slice(-10).map((entry) => ({
       role: entry.role,
       content: entry.content,
       timestamp: entry.timestamp,

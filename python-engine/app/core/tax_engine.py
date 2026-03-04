@@ -480,7 +480,9 @@ class TaxEngine:
         if handler:
             return await handler()
 
-        return await self._handle_general_query(message, classification, customer_type)
+        # For UNKNOWN intent without RAG, show service menu instead of
+        # falling back to _handle_general_query (which would loop).
+        return self._build_service_menu_response(classification, customer_type)
 
     async def _handle_general_query(
         self, message: str, classification: ClassificationResult, customer_type: CustomerType,
@@ -510,23 +512,48 @@ class TaxEngine:
                     references=references,
                 )
 
+        # RAG/LLM unavailable — show service menu with customer-aware context
+        return self._build_service_menu_response(classification, customer_type)
+
+    def _build_service_menu_response(
+        self, classification: ClassificationResult, customer_type: CustomerType,
+    ) -> dict:
+        """Build a service menu response that avoids repeating the same
+        question and provides actionable choices whose payloads match
+        known intent patterns (preventing infinite loops).
+        """
+        type_label = {
+            CustomerType.SME: "Doanh nghiệp",
+            CustomerType.HOUSEHOLD: "Hộ kinh doanh",
+            CustomerType.INDIVIDUAL: "Cá nhân kinh doanh",
+        }.get(customer_type, "")
+
+        if type_label:
+            greeting = f"Xin chào {type_label}! "
+        else:
+            greeting = ""
+
+        reply = (
+            f"{greeting}Tôi có thể hỗ trợ bạn các dịch vụ sau:\n\n"
+            "1. Tính thuế (GTGT, TNDN, TNCN, Môn bài)\n"
+            "2. Hướng dẫn kê khai & quyết toán thuế\n"
+            "3. Tra cứu quy định & văn bản pháp luật\n"
+            "4. Hạn nộp thuế\n"
+            "5. Thủ tục đăng ký mã số thuế\n\n"
+            "Bạn có thể gõ số hoặc mô tả câu hỏi cụ thể, ví dụ:\n"
+            '• "Tính thuế GTGT doanh thu 500 triệu"\n'
+            '• "Thuế TNCN lương 30 triệu 2 người phụ thuộc"\n'
+            '• "Hạn nộp thuế TNDN quý 1"'
+        )
+
         return self._build_response(
-            reply=(
-                "Tôi hiểu câu hỏi của bạn. Để trả lời chính xác hơn, "
-                "bạn có thể cho tôi biết thêm:\n\n"
-                "1. Bạn là doanh nghiệp (SME), hộ kinh doanh, hay cá thể?\n"
-                "2. Câu hỏi liên quan đến loại thuế nào?\n"
-                "3. Có số liệu cụ thể nào không?\n\n"
-                "Hoặc bạn có thể thử các câu hỏi như:\n"
-                '• "Tính thuế GTGT doanh thu 500 triệu"\n'
-                '• "Thuế TNCN lương 30 triệu 2 người phụ thuộc"\n'
-                '• "Hạn nộp thuế TNDN quý 1"'
-            ),
+            reply=reply,
             classification=classification,
             actions=[
-                {"label": "Thuế GTGT", "action_type": "quick_reply", "payload": "thông tin thuế GTGT"},
-                {"label": "Thuế TNDN", "action_type": "quick_reply", "payload": "thông tin thuế TNDN"},
-                {"label": "Thuế TNCN", "action_type": "quick_reply", "payload": "thông tin thuế TNCN"},
+                {"label": "Tính thuế", "action_type": "quick_reply", "payload": "tính thuế"},
+                {"label": "Kê khai thuế", "action_type": "quick_reply", "payload": "kê khai thuế"},
+                {"label": "Hạn nộp thuế", "action_type": "quick_reply", "payload": "hạn nộp thuế"},
+                {"label": "Đăng ký MST", "action_type": "quick_reply", "payload": "đăng ký mã số thuế"},
             ],
         )
 

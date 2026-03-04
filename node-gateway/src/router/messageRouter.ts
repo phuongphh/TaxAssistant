@@ -71,13 +71,16 @@ export class MessageRouter {
           message.channel,
           message.userId,
         );
-        // Cache customer ID in session
+        // Sync customer profile data into session and persist to Redis
         if (customerProfile?.customerId) {
           session.customerId = customerProfile.customerId;
+          session.customerProfile = customerProfile;
           // Sync customer type from profile → session
           if (customerProfile.customerType && customerProfile.customerType !== 'unknown') {
             session.customerType = customerProfile.customerType as SessionData['customerType'];
           }
+          // Persist session so subsequent Redis reads see updated values
+          await this.sessionManager.saveSession(session);
         }
         // Get active support cases
         if (customerProfile?.customerId) {
@@ -103,6 +106,10 @@ export class MessageRouter {
       }
 
       // 5. Route to Tax Engine with full context
+      // NOTE: We use the original 'session' (not re-read from Redis) because
+      // its conversationHistory contains turns BEFORE the current message,
+      // while the current message is passed separately as request.message.
+      // The session's customerType/customerId are already correct (set in step 2).
       const engineResponse = await this.taxEngine.processMessage(
         requestId,
         message.text || `[${message.type}]`,
