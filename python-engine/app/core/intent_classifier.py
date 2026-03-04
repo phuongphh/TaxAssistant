@@ -68,6 +68,8 @@ _INTENT_PATTERNS: list[tuple[Intent, list[str]]] = [
     (Intent.TAX_PROCEDURE, [
         r"thủ tục", r"quy trình", r"cách .+ nộp", r"hướng dẫn",
         r"làm sao", r"cần gì để", r"cần những gì",
+        r"quy trình.*kê khai", r"quy trình.*nộp thuế", r"quy trình.*đăng ký",
+        r"thủ tục.*kê khai", r"thủ tục.*nộp thuế",
     ]),
     (Intent.DOCUMENT_CHECK, [
         r"hóa đơn", r"chứng từ", r"hợp lệ", r"kiểm tra",
@@ -150,7 +152,8 @@ class IntentClassifier:
         # Extract numeric entities
         entities = self._extract_entities(text_lower)
 
-        confidence = min(best_score, 1.0) if intent != Intent.UNKNOWN else 0.3
+        # Normalize confidence: 1 match → 0.6, 2 → 0.75, 3+ → 0.85+
+        confidence = min(0.5 + best_score * 0.15, 0.95) if intent != Intent.UNKNOWN else 0.3
 
         return ClassificationResult(
             intent=intent,
@@ -160,9 +163,20 @@ class IntentClassifier:
         )
 
     def _match_patterns(self, text: str, patterns: list[str]) -> float:
-        """Count how many patterns match, return normalized score."""
-        matches = sum(1 for p in patterns if re.search(p, text))
-        return matches / len(patterns) if patterns else 0
+        """Score how well patterns match the text.
+
+        Uses absolute match count (not normalized by total patterns) so that
+        intents with more patterns aren't penalised.  Compound patterns
+        (e.g. "quy trình.*kê khai") score 2 points to give them priority
+        over single-keyword matches across different intents.
+        """
+        score = 0.0
+        for p in patterns:
+            if re.search(p, text):
+                # Compound patterns (containing ".*") indicate a stronger
+                # multi-keyword signal and deserve extra weight.
+                score += 2.0 if ".*" in p else 1.0
+        return score
 
     def _extract_entities(self, text: str) -> dict:
         """Extract numeric entities from text (revenue, income, etc.)."""

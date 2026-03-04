@@ -397,17 +397,86 @@ class TaxEngine:
                     references=references,
                 )
 
-        return self._build_response(
-            reply=(
+        # Provide specific procedure info based on what the user asked about
+        msg_lower = message.lower()
+        if "kê khai" in msg_lower or "nộp thuế" in msg_lower:
+            # User asked about declaration/filing procedure
+            if customer_type in (CustomerType.HOUSEHOLD, CustomerType.INDIVIDUAL):
+                reply = (
+                    "Quy trình kê khai thuế cho Hộ kinh doanh / Cá nhân:\n\n"
+                    "📋 Bước 1: Xác định phương pháp tính thuế\n"
+                    "• Khoán: doanh thu ≤ 100 triệu/năm → miễn thuế GTGT, TNCN\n"
+                    "• Khoán: DT > 100 triệu → thuế GTGT 1-5%, TNCN 0.5-2%\n\n"
+                    "📋 Bước 2: Chuẩn bị hồ sơ kê khai\n"
+                    "• Tờ khai thuế khoán (Mẫu 01/CNKD)\n"
+                    "• Sổ sách, hóa đơn bán hàng\n\n"
+                    "📋 Bước 3: Nộp tờ khai\n"
+                    "• Qua eTax Mobile hoặc thuedientu.gdt.gov.vn\n"
+                    "• Hoặc nộp trực tiếp tại Chi cục Thuế\n\n"
+                    "📋 Bước 4: Nộp thuế\n"
+                    "• Hạn: theo quý (ngày cuối tháng đầu quý sau)\n"
+                    "• Quyết toán năm: trước 31/03 năm sau\n\n"
+                    "📎 Căn cứ: Thông tư 40/2021/TT-BTC"
+                )
+            else:
+                reply = (
+                    "Quy trình kê khai thuế cho Doanh nghiệp:\n\n"
+                    "📋 Bước 1: Đăng ký phương pháp tính thuế GTGT\n"
+                    "• Khấu trừ (DT > 1 tỷ/năm) hoặc Trực tiếp\n\n"
+                    "📋 Bước 2: Kê khai thuế hàng tháng/quý\n"
+                    "• Thuế GTGT: Mẫu 01/GTGT (hạn ngày 20 tháng sau hoặc cuối quý)\n"
+                    "• Thuế TNCN: Mẫu 05/KK-TNCN (nếu có khấu trừ)\n"
+                    "• Thuế TNDN: tạm tính quý\n\n"
+                    "📋 Bước 3: Quyết toán thuế năm\n"
+                    "• Hạn: 90 ngày kể từ kết thúc năm tài chính\n"
+                    "• Mẫu 03/TNDN, Mẫu 05/QTT-TNCN\n\n"
+                    "📋 Bước 4: Nộp thuế qua ngân hàng hoặc Kho bạc\n"
+                    "• Kê khai qua thuedientu.gdt.gov.vn hoặc HTKK\n\n"
+                    "📎 Căn cứ: Luật Quản lý thuế 38/2019, Nghị định 126/2020"
+                )
+        elif "đăng ký" in msg_lower or "mã số thuế" in msg_lower.replace("mst", "mã số thuế"):
+            reply = (
+                "Quy trình đăng ký mã số thuế:\n\n"
+                "📋 Bước 1: Chuẩn bị hồ sơ\n"
+                "• Tờ khai đăng ký thuế\n"
+                "• Bản sao CCCD/CMND\n"
+                "• Giấy chứng nhận ĐKKD\n\n"
+                "📋 Bước 2: Nộp hồ sơ\n"
+                "• Tại Chi cục Thuế quận/huyện\n"
+                "• Hoặc qua Cổng DVC quốc gia\n\n"
+                "📋 Bước 3: Nhận MST (3 ngày làm việc)\n\n"
+                "📎 Căn cứ: Thông tư 105/2020/TT-BTC"
+            )
+        elif "hoàn thuế" in msg_lower:
+            reply = (
+                "Quy trình hoàn thuế GTGT:\n\n"
+                "📋 Bước 1: Kiểm tra điều kiện hoàn thuế\n"
+                "• Xuất khẩu, đầu tư mới, hoặc 12 tháng liên tục có GTGT đầu vào > đầu ra\n\n"
+                "📋 Bước 2: Lập hồ sơ hoàn thuế\n"
+                "• Giấy đề nghị hoàn thuế (Mẫu 01/HT)\n"
+                "• Bảng kê hóa đơn, chứng từ\n\n"
+                "📋 Bước 3: Nộp hồ sơ tại cơ quan thuế quản lý\n\n"
+                "📋 Bước 4: Cơ quan thuế xét duyệt (40-60 ngày)\n\n"
+                "📎 Căn cứ: Luật Thuế GTGT, Thông tư 80/2021/TT-BTC"
+            )
+        else:
+            reply = (
                 "Về thủ tục thuế, tôi có thể hỗ trợ:\n"
-                "• Đăng ký thuế lần đầu\n"
-                "• Kê khai thuế hàng quý/năm\n"
-                "• Quyết toán thuế\n"
-                "• Hoàn thuế GTGT\n"
+                "• Quy trình kê khai thuế hàng quý/năm\n"
+                "• Quy trình đăng ký mã số thuế\n"
+                "• Quy trình quyết toán thuế\n"
+                "• Quy trình hoàn thuế GTGT\n"
                 "• Thay đổi thông tin đăng ký thuế\n\n"
                 "Bạn cần hỗ trợ thủ tục nào cụ thể?"
-            ),
+            )
+
+        return self._build_response(
+            reply=reply,
             classification=classification,
+            actions=[
+                {"label": "Hạn nộp thuế", "action_type": "quick_reply", "payload": "hạn nộp thuế"},
+                {"label": "Tính thuế", "action_type": "quick_reply", "payload": "tính thuế"},
+            ],
         )
 
     async def _handle_declaration(
