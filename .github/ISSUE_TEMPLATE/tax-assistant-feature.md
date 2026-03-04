@@ -34,7 +34,7 @@ Mô tả rõ vấn đề cần giải quyết.
 ### Case B:
 ### Edge Case:
 
-## 5. Tax Logic Constraints (BẮT BUỘC)
+## 5. Tax Logic Constraints (nếu có liên quan đến tax-logic)
 - Luật áp dụng:
 - Công thức tính:
 - Nguồn tham chiếu:
