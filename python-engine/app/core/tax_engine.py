@@ -9,6 +9,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from app.core.intent_classifier import ClassificationResult, Intent, IntentClassifier
+from app.core.onboarding import OnboardingHandler
 from app.core.tax_rules.base import CustomerType, TaxCategory, TaxContext, TaxResult
 from app.core.tax_rules.cit import CITRule
 from app.core.tax_rules.license_tax import LicenseTaxRule
@@ -65,6 +66,11 @@ class TaxEngine:
         """
         ct = CustomerType(customer_type) if customer_type in CustomerType.__members__.values() else CustomerType.UNKNOWN
         history = conversation_history or []
+
+        # 0. Check for numeric service selection (from onboarding menu buttons)
+        service_type = OnboardingHandler.parse_service_selection(message.strip())
+        if service_type:
+            return self._route_service_selection(service_type, ct, memory_context)
 
         # 1. Classify intent
         classification = self.classifier.classify(message)
@@ -126,6 +132,128 @@ class TaxEngine:
 
         # Unknown intent → use RAG/LLM for general answer
         return await self._handle_general_query(message, classification, ct, history, memory_context)
+
+    def _route_service_selection(
+        self, service_type: str, customer_type: CustomerType, memory_context: str = "",
+    ) -> dict:
+        """Route a numeric/keyword service selection from the onboarding menu
+        into the appropriate intent handler by synthesizing a ClassificationResult."""
+        from app.core.onboarding import SERVICE_TITLE_MAP
+
+        service_intent_map = {
+            "tax_calculation": (Intent.TAX_CALCULATE, None),
+            "tax_declaration": (Intent.DECLARATION, None),
+            "tax_registration": (Intent.REGISTRATION, None),
+            "tax_consultation": (Intent.TAX_INFO, None),
+            "invoice_check": (Intent.DOCUMENT_CHECK, None),
+            "penalty_consultation": (Intent.PENALTY, None),
+            "tax_refund": (Intent.TAX_PROCEDURE, None),
+            "annual_settlement": (Intent.DECLARATION, None),
+        }
+
+        intent, category = service_intent_map.get(service_type, (Intent.UNKNOWN, None))
+        title = SERVICE_TITLE_MAP.get(service_type, service_type)
+
+        classification = ClassificationResult(
+            intent=intent,
+            tax_category=category,
+            confidence=0.9,
+            extracted_entities={},
+        )
+
+        logger.info("Service selection: type=%s → intent=%s title='%s'", service_type, intent.value, title)
+
+        # For calculation, ask which tax type
+        if intent == Intent.TAX_CALCULATE:
+            return self._build_response(
+                reply=(
+                    "Bạn muốn tính loại thuế nào?\n"
+                    "• Thuế GTGT (VAT)\n"
+                    "• Thuế TNDN (CIT)\n"
+                    "• Thuế TNCN (PIT)\n"
+                    "• Thuế Môn bài"
+                ),
+                classification=classification,
+                actions=[
+                    {"label": "Thuế GTGT", "action_type": "quick_reply", "payload": "tính thuế GTGT"},
+                    {"label": "Thuế TNDN", "action_type": "quick_reply", "payload": "tính thuế TNDN"},
+                    {"label": "Thuế TNCN", "action_type": "quick_reply", "payload": "tính thuế TNCN"},
+                    {"label": "Thuế Môn bài", "action_type": "quick_reply", "payload": "tính thuế môn bài"},
+                ],
+            )
+
+        # For info/consultation, provide tax overview
+        if intent == Intent.TAX_INFO:
+            overview = self._get_tax_overview(customer_type)
+            return self._build_response(reply=overview, classification=classification)
+
+        # For declaration
+        if intent == Intent.DECLARATION:
+            return self._build_response(
+                reply=(
+                    "Về kê khai thuế:\n\n"
+                    "📋 Các tờ khai phổ biến:\n"
+                    "• Mẫu 01/GTGT - Tờ khai thuế GTGT (hàng tháng/quý)\n"
+                    "• Mẫu 03/TNDN - Tờ khai tạm tính thuế TNDN (quý)\n"
+                    "• Mẫu 02/KK-TNCN - Tờ khai thuế TNCN\n"
+                    "• Mẫu 01/MBAI - Tờ khai thuế môn bài\n\n"
+                    "Bạn muốn tìm hiểu về tờ khai nào?"
+                ),
+                classification=classification,
+            )
+
+        # For registration
+        if intent == Intent.REGISTRATION:
+            return self._build_response(
+                reply=(
+                    "Để đăng ký mã số thuế, bạn cần:\n\n"
+                    "1. Tờ khai đăng ký thuế (Mẫu 01-ĐK-TCT hoặc 03-ĐK-TCT)\n"
+                    "2. Bản sao CCCD/CMND\n"
+                    "3. Giấy chứng nhận ĐKKD\n\n"
+                    "Bạn muốn biết thêm chi tiết không?"
+                ),
+                classification=classification,
+            )
+
+        # For penalty
+        if intent == Intent.PENALTY:
+            return self._build_response(
+                reply=(
+                    "Về xử phạt vi phạm thuế:\n\n"
+                    "⚠️ Chậm nộp tờ khai: 2-5 triệu VND\n"
+                    "⚠️ Chậm nộp tiền thuế: 0.03%/ngày\n"
+                    "⚠️ Khai sai: 20% số thuế khai thiếu\n\n"
+                    "Bạn cần tư vấn trường hợp cụ thể nào?"
+                ),
+                classification=classification,
+            )
+
+        # For document check
+        if intent == Intent.DOCUMENT_CHECK:
+            return self._build_response(
+                reply=(
+                    "Tôi có thể giúp kiểm tra hóa đơn, chứng từ.\n\n"
+                    "Bạn hãy gửi hình ảnh hóa đơn hoặc mô tả thông tin cần kiểm tra."
+                ),
+                classification=classification,
+            )
+
+        # For procedure (tax refund, etc.)
+        if intent == Intent.TAX_PROCEDURE:
+            return self._build_response(
+                reply=(
+                    "Về thủ tục thuế, tôi có thể hỗ trợ:\n"
+                    "• Đăng ký thuế lần đầu\n"
+                    "• Kê khai thuế hàng quý/năm\n"
+                    "• Quyết toán thuế\n"
+                    "• Hoàn thuế GTGT\n\n"
+                    "Bạn cần hỗ trợ thủ tục nào?"
+                ),
+                classification=classification,
+            )
+
+        # Fallback
+        return self._build_service_menu_response(classification, customer_type, memory_context)
 
     async def _handle_calculation(
         self, classification: ClassificationResult, customer_type: CustomerType,

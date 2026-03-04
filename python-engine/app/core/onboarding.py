@@ -231,9 +231,9 @@ class OnboardingHandler:
         return {
             "reply": reply,
             "actions": [
-                {"label": "Tính thuế", "action_type": "quick_reply", "payload": "1"},
-                {"label": "Kê khai thuế", "action_type": "quick_reply", "payload": "2"},
-                {"label": "Tra cứu quy định", "action_type": "quick_reply", "payload": "4"},
+                {"label": "Tính thuế", "action_type": "quick_reply", "payload": "tính thuế"},
+                {"label": "Kê khai thuế", "action_type": "quick_reply", "payload": "kê khai thuế"},
+                {"label": "Tra cứu quy định", "action_type": "quick_reply", "payload": "tra cứu quy định thuế"},
             ],
             "update_fields": update_fields,
             "onboarding_complete": True,
@@ -253,9 +253,9 @@ class OnboardingHandler:
         return {
             "reply": reply,
             "actions": [
-                {"label": "Tính thuế", "action_type": "quick_reply", "payload": "1"},
-                {"label": "Kê khai thuế", "action_type": "quick_reply", "payload": "2"},
-                {"label": "Tra cứu quy định", "action_type": "quick_reply", "payload": "4"},
+                {"label": "Tính thuế", "action_type": "quick_reply", "payload": "tính thuế"},
+                {"label": "Kê khai thuế", "action_type": "quick_reply", "payload": "kê khai thuế"},
+                {"label": "Tra cứu quy định", "action_type": "quick_reply", "payload": "tra cứu quy định thuế"},
             ],
             "update_fields": {},
             "onboarding_complete": False,

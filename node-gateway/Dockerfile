@@ -18,8 +18,9 @@ WORKDIR /app
 RUN addgroup -g 1001 -S appgroup && \
     adduser -S appuser -u 1001 -G appgroup
 
-COPY node-gateway/package.json ./
-RUN npm install --omit=dev && npm cache clean --force
+COPY node-gateway/package.json node-gateway/tsconfig.json ./
+# Install all deps (including tsx for dev hot-reload via docker-compose)
+RUN npm install && npm cache clean --force
 
 COPY --from=builder /app/dist ./dist
 COPY proto/ /proto/
