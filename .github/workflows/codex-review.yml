@@ -16,6 +16,10 @@ jobs:
         run: |
           git fetch origin ${{ github.base_ref }}
           git diff origin/${{ github.base_ref }} > pr_diff.txt
+          
+      - name: Install dependencies
+        run: |
+          pip install openai
 
       - name: Run Codex Review
         env:
