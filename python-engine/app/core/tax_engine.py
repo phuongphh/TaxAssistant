@@ -65,7 +65,6 @@ class TaxEngine:
         """
         ct = CustomerType(customer_type) if customer_type in CustomerType.__members__.values() else CustomerType.UNKNOWN
         history = conversation_history or []
-        self._current_memory_context = memory_context
 
         # 1. Classify intent
         classification = self.classifier.classify(message)
@@ -99,13 +98,13 @@ class TaxEngine:
         # and TAX_DEADLINE are exempt because they don't need conversational
         # context.
         if history and classification.intent not in (Intent.TAX_CALCULATE, Intent.TAX_DEADLINE):
-            return await self._handle_contextual_query(message, classification, ct, history)
+            return await self._handle_contextual_query(message, classification, ct, history, memory_context)
 
         if classification.intent == Intent.TAX_CALCULATE:
-            return await self._handle_calculation(classification, ct)
+            return await self._handle_calculation(classification, ct, memory_context)
 
         if classification.intent == Intent.TAX_INFO:
-            return await self._handle_tax_info(classification, ct, message, history)
+            return await self._handle_tax_info(classification, ct, message, history, memory_context)
 
         if classification.intent == Intent.TAX_DEADLINE:
             return self._build_response(
@@ -114,22 +113,23 @@ class TaxEngine:
             )
 
         if classification.intent == Intent.TAX_PROCEDURE:
-            return await self._handle_procedure(classification, ct, message, history)
+            return await self._handle_procedure(classification, ct, message, history, memory_context)
 
         if classification.intent == Intent.REGISTRATION:
-            return await self._handle_registration(classification, ct, message, history)
+            return await self._handle_registration(classification, ct, message, history, memory_context)
 
         if classification.intent == Intent.DECLARATION:
-            return await self._handle_declaration(classification, ct, message, history)
+            return await self._handle_declaration(classification, ct, message, history, memory_context)
 
         if classification.intent == Intent.PENALTY:
-            return await self._handle_penalty(classification, ct, message, history)
+            return await self._handle_penalty(classification, ct, message, history, memory_context)
 
         # Unknown intent → use RAG/LLM for general answer
-        return await self._handle_general_query(message, classification, ct, history)
+        return await self._handle_general_query(message, classification, ct, history, memory_context)
 
     async def _handle_calculation(
-        self, classification: ClassificationResult, customer_type: CustomerType
+        self, classification: ClassificationResult, customer_type: CustomerType,
+        memory_context: str = "",
     ) -> dict:
         """Handle tax calculation requests."""
         category = classification.tax_category
@@ -191,6 +191,7 @@ class TaxEngine:
                 customer_type=customer_type.value,
                 tax_category=category.value,
                 n_results=3,
+                memory_context=memory_context,
             )
             for s in rag_result.sources:
                 references.append({
@@ -205,7 +206,7 @@ class TaxEngine:
 
     async def _handle_tax_info(
         self, classification: ClassificationResult, customer_type: CustomerType, message: str,
-        history: list[dict] | None = None,
+        history: list[dict] | None = None, memory_context: str = "",
     ) -> dict:
         """Handle tax information requests using RAG when available."""
         category = classification.tax_category
@@ -218,7 +219,7 @@ class TaxEngine:
                 customer_type=customer_type.value,
                 tax_category=category_filter,
                 conversation_history=history,
-                memory_context=getattr(self, "_current_memory_context", ""),
+                memory_context=memory_context,
             )
             if rag_result.confidence > 0.4 and rag_result.answer:
                 references_list = [
@@ -241,7 +242,7 @@ class TaxEngine:
 
     async def _handle_procedure(
         self, classification: ClassificationResult, customer_type: CustomerType, message: str,
-        history: list[dict] | None = None,
+        history: list[dict] | None = None, memory_context: str = "",
     ) -> dict:
         """Handle procedure/process questions using RAG if available."""
         if self.rag:
@@ -250,7 +251,7 @@ class TaxEngine:
                 customer_type=customer_type.value,
                 tax_category="procedure",
                 conversation_history=history,
-                memory_context=getattr(self, "_current_memory_context", ""),
+                memory_context=memory_context,
             )
             if rag_result.answer:
                 references = [
@@ -278,7 +279,7 @@ class TaxEngine:
 
     async def _handle_declaration(
         self, classification: ClassificationResult, customer_type: CustomerType, message: str,
-        history: list[dict] | None = None,
+        history: list[dict] | None = None, memory_context: str = "",
     ) -> dict:
         """Handle declaration/filing questions using RAG if available."""
         if self.rag:
@@ -288,7 +289,7 @@ class TaxEngine:
                 customer_type=customer_type.value,
                 tax_category=category_filter,
                 conversation_history=history,
-                memory_context=getattr(self, "_current_memory_context", ""),
+                memory_context=memory_context,
             )
             if rag_result.answer:
                 references = [
@@ -316,7 +317,7 @@ class TaxEngine:
 
     async def _handle_penalty(
         self, classification: ClassificationResult, customer_type: CustomerType, message: str,
-        history: list[dict] | None = None,
+        history: list[dict] | None = None, memory_context: str = "",
     ) -> dict:
         """Handle penalty-related questions using RAG when available."""
         if self.rag:
@@ -324,6 +325,7 @@ class TaxEngine:
                 question=message,
                 customer_type=customer_type.value,
                 conversation_history=history,
+                memory_context=memory_context,
             )
             if rag_result.confidence > 0.4 and rag_result.answer:
                 references = [
@@ -359,7 +361,7 @@ class TaxEngine:
 
     async def _handle_registration(
         self, classification: ClassificationResult, customer_type: CustomerType, message: str,
-        history: list[dict] | None = None,
+        history: list[dict] | None = None, memory_context: str = "",
     ) -> dict:
         """Handle tax registration questions using RAG if available."""
         if self.rag:
@@ -368,6 +370,7 @@ class TaxEngine:
                 customer_type=customer_type.value,
                 tax_category="procedure",
                 conversation_history=history,
+                memory_context=memory_context,
             )
             if rag_result.confidence > 0.4 and rag_result.answer:
                 references = [
@@ -440,6 +443,7 @@ class TaxEngine:
     async def _handle_contextual_query(
         self, message: str, classification: ClassificationResult,
         customer_type: CustomerType, history: list[dict],
+        memory_context: str = "",
     ) -> dict:
         """Handle follow-up messages using LLM with full conversation history.
 
@@ -454,7 +458,7 @@ class TaxEngine:
                 customer_type=customer_type.value,
                 tax_category=category_filter,
                 conversation_history=history,
-                memory_context=getattr(self, "_current_memory_context", ""),
+                memory_context=memory_context,
             )
             if rag_result.answer:
                 references = [
@@ -467,14 +471,14 @@ class TaxEngine:
                     references=references,
                 )
 
-        # LLM unavailable or failed — fall back to intent-specific handler
-        # without history so we get the hardcoded response as last resort.
+        # LLM unavailable or failed — fall back to intent-specific handler.
+        # Pass memory_context so handlers can still use customer info.
         handler = {
-            Intent.TAX_INFO: lambda: self._handle_tax_info(classification, customer_type, message),
-            Intent.TAX_PROCEDURE: lambda: self._handle_procedure(classification, customer_type, message),
-            Intent.DECLARATION: lambda: self._handle_declaration(classification, customer_type, message),
-            Intent.REGISTRATION: lambda: self._handle_registration(classification, customer_type, message),
-            Intent.PENALTY: lambda: self._handle_penalty(classification, customer_type, message),
+            Intent.TAX_INFO: lambda: self._handle_tax_info(classification, customer_type, message, memory_context=memory_context),
+            Intent.TAX_PROCEDURE: lambda: self._handle_procedure(classification, customer_type, message, memory_context=memory_context),
+            Intent.DECLARATION: lambda: self._handle_declaration(classification, customer_type, message, memory_context=memory_context),
+            Intent.REGISTRATION: lambda: self._handle_registration(classification, customer_type, message, memory_context=memory_context),
+            Intent.PENALTY: lambda: self._handle_penalty(classification, customer_type, message, memory_context=memory_context),
         }.get(classification.intent)
 
         if handler:
@@ -482,11 +486,11 @@ class TaxEngine:
 
         # For UNKNOWN intent without RAG, show service menu instead of
         # falling back to _handle_general_query (which would loop).
-        return self._build_service_menu_response(classification, customer_type)
+        return self._build_service_menu_response(classification, customer_type, memory_context)
 
     async def _handle_general_query(
         self, message: str, classification: ClassificationResult, customer_type: CustomerType,
-        history: list[dict] | None = None,
+        history: list[dict] | None = None, memory_context: str = "",
     ) -> dict:
         """
         Handle unclassified queries using RAG pipeline.
@@ -499,7 +503,7 @@ class TaxEngine:
                 customer_type=customer_type.value,
                 tax_category=category_filter,
                 conversation_history=history,
-                memory_context=getattr(self, "_current_memory_context", ""),
+                memory_context=memory_context,
             )
             if rag_result.confidence > 0.4 and rag_result.answer:
                 references = [
@@ -513,14 +517,18 @@ class TaxEngine:
                 )
 
         # RAG/LLM unavailable — show service menu with customer-aware context
-        return self._build_service_menu_response(classification, customer_type)
+        return self._build_service_menu_response(classification, customer_type, memory_context)
 
     def _build_service_menu_response(
         self, classification: ClassificationResult, customer_type: CustomerType,
+        memory_context: str = "",
     ) -> dict:
         """Build a service menu response that avoids repeating the same
         question and provides actionable choices whose payloads match
         known intent patterns (preventing infinite loops).
+
+        Uses memory_context to show customer info even when LLM is unavailable,
+        proving to the user that the bot remembers them.
         """
         type_label = {
             CustomerType.SME: "Doanh nghiệp",
@@ -528,7 +536,17 @@ class TaxEngine:
             CustomerType.INDIVIDUAL: "Cá nhân kinh doanh",
         }.get(customer_type, "")
 
-        if type_label:
+        # Extract customer name from memory_context if available
+        customer_name = ""
+        if memory_context:
+            for line in memory_context.split("\n"):
+                if line.startswith("Tên: "):
+                    customer_name = line[5:].strip()
+                    break
+
+        if customer_name and type_label:
+            greeting = f"Xin chào {customer_name} ({type_label})! "
+        elif type_label:
             greeting = f"Xin chào {type_label}! "
         else:
             greeting = ""
