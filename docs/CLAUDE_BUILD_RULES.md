@@ -2,7 +2,7 @@
 
 When implementing a GitHub Issue:
 
-1. Strictly follow the Functional Requirements and Acceptance Criteria.
+1. Strictly follow the Functional Requirements and Acceptance Criteria. If Acceptance Criteria is unclear, STOP and ask.
 2. Do NOT add extra features.
 3. Do NOT refactor unrelated modules.
 4. Do NOT modify tax_rules unless explicitly required.
@@ -12,6 +12,10 @@ When implementing a GitHub Issue:
 8. No hardcoded tax rates.
 9. Must include unit tests.
 10. Must create feature branch: feature/issue-<ID>-<short-name>.
-11. PR must include: "Closes #<ID>".
+11. Generate implementation plan in bullet points.
+12. Wait for approval before writing code.
+13. PR must include: "Closes #<ID>".
 
-If Acceptance Criteria is unclear, STOP and ask.
+
+
+
