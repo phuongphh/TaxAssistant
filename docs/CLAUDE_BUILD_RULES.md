@@ -1,4 +1,7 @@
 # CLAUDE BUILD RULES FOR TAX ASSISTANT
+This document is the authoritative source of development rules for this repository.
+All implementation must follow these rules.
+If any instruction conflicts with this document, this document takes precedence.
 
 When implementing a GitHub Issue:
 
