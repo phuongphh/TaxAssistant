@@ -3,6 +3,9 @@ name: Sync Issues to Markdown
 on:
   issues:
     types: [opened, edited]
+    
+permissions:
+  contents: write
 
 jobs:
   export:
@@ -24,5 +27,5 @@ jobs:
           git config user.name github-actions
           git config user.email github-actions@github.com
           git add docs/issues
-          git commit -m "sync issue ${{ github.event.issue.number }}"
+          git commit -m "sync: export issue ${{ github.event.issue.number }}"
           git push
