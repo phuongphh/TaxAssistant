@@ -4,13 +4,13 @@ Shared test fixtures for Tax Assistant test suite.
 
 import pytest
 
-from app.core.intent_classifier import IntentClassifier
-from app.core.tax_engine import TaxEngine
-from app.core.tax_rules.base import CustomerType, TaxCategory, TaxContext
-from app.core.tax_rules.vat import VATRule
-from app.core.tax_rules.cit import CITRule
-from app.core.tax_rules.pit import PITRule
-from app.core.tax_rules.license_tax import LicenseTaxRule
+from core.intent_classifier import IntentClassifier
+from services.ai.tax_advisor import TaxAdvisor as TaxEngine
+from core.tax_rules.base import CustomerType, TaxCategory, TaxContext
+from core.tax_rules.vat import VATRule
+from core.tax_rules.cit import CITRule
+from core.tax_rules.pit import PITRule
+from core.tax_rules.license_tax import LicenseTaxRule
 
 
 # ---------------------------------------------------------------------------
