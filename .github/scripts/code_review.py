@@ -28,7 +28,7 @@ PASS
 """
 
 response = client.messages.create(
-    model="claude-3-5-sonnet-20241022",
+    model="claude-sonnet-4-5",
     max_tokens=200,
     temperature=0,
     system=SYSTEM_PROMPT,
