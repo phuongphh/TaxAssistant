@@ -17,7 +17,9 @@ When implementing a GitHub Issue:
 10. Must create feature branch: feature/issue-<ID>-<short-name>.
 11. Generate implementation plan in bullet points.
 12. Wait for approval before writing code.
-13. PR must include: "Closes #<ID>".
+13. When creating the pull request:
+- Include the issue number
+- Add this line in the PR description: Closes #{issue_number}
 
 
 
