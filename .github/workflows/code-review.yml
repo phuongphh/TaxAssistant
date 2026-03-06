@@ -25,4 +25,4 @@ jobs:
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
-          python .github/scripts/codex_review.py
+          python .github/scripts/code_review.py
