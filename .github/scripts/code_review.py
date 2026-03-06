@@ -11,6 +11,7 @@ REPO = os.environ.get("REPO")
 if not ANTHROPIC_API_KEY:
     print("ERROR: ANTHROPIC_API_KEY secret is not set.")
     sys.exit(1)
+client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
 try:
     with open("pr_diff.txt", "r") as f:
