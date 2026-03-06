@@ -1,8 +1,10 @@
 import os
 import sys
-from openai import OpenAI
+import anthropic
 
-client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+client = anthropic.Anthropic(
+    api_key=os.environ["ANTHROPIC_API_KEY"]
+)
 
 with open("pr_diff.txt", "r") as f:
     diff = f.read()
@@ -25,16 +27,20 @@ If everything is correct, respond with:
 PASS
 """
 
-response = client.chat.completions.create(
-    model="gpt-4o-mini",
+response = client.messages.create(
+    model="claude-3-5-sonnet-20241022",
+    max_tokens=200,
+    temperature=0,
+    system=SYSTEM_PROMPT,
     messages=[
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": diff}
-    ],
-    temperature=0
+        {
+            "role": "user",
+            "content": diff
+        }
+    ]
 )
 
-result = response.choices[0].message.content.strip()
+result = response.content[0].text.strip()
 
 print(result)
 
