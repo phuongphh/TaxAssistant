@@ -41,24 +41,20 @@ If everything is correct, respond with:
 PASS
 """
 
-try:
-    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-    response = client.messages.create(
-        model="claude-3-5-sonnet-20241022",
-        max_tokens=500,
-        temperature=0,
-        system=SYSTEM_PROMPT,
-        messages=[
-            {
-                "role": "user",
-                "content": diff
-            }
-        ]
-    )
-    result = response.content[0].text.strip()
-except Exception as e:
-    print(f"ERROR: Anthropic API call failed: {e}")
-    sys.exit(1)
+response = client.messages.create(
+    model="claude-haiku-4-5-20251001",
+    max_tokens=200,
+    temperature=0,
+    system=SYSTEM_PROMPT,
+    messages=[
+        {
+            "role": "user",
+            "content": diff
+        }
+    ]
+)
+
+result = response.content[0].text.strip()
 
 print(result)
 
