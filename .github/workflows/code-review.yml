@@ -1,4 +1,4 @@
-name: Codex Review
+name: Code Review
 
 on:
   pull_request:
@@ -21,7 +21,7 @@ jobs:
         run: |
           pip install -r requirements.txt
 
-      - name: Run Codex Review
+      - name: Run Code Review
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
