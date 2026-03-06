@@ -125,3 +125,37 @@ class TestBuildMemoryContext:
         assert "1 - 10 tỷ" in result
         assert "QT 2025" in result
         assert "Đã tư vấn quyết toán" in result
+
+    def test_display_name_in_context(self):
+        customer = {
+            "customer_type": "sme",
+            "onboarding_step": "completed",
+            "display_name": "Nguyen Van An",
+            "username": "anvan",
+            "tax_profile": {},
+            "notes": [],
+        }
+        result = build_memory_context(customer)
+        assert "Nguyen Van An" in result
+
+    def test_first_name_in_context_when_no_display_name(self):
+        customer = {
+            "customer_type": "individual",
+            "onboarding_step": "completed",
+            "first_name": "Lan",
+            "tax_profile": {},
+            "notes": [],
+        }
+        result = build_memory_context(customer)
+        assert "Lan" in result
+
+    def test_username_displayed_in_context(self):
+        customer = {
+            "customer_type": "individual",
+            "onboarding_step": "completed",
+            "username": "lannguyen",
+            "tax_profile": {},
+            "notes": [],
+        }
+        result = build_memory_context(customer)
+        assert "@lannguyen" in result

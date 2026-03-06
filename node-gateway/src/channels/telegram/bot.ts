@@ -77,11 +77,17 @@ export class TelegramAdapter implements ChannelAdapter {
         const chatId = cbQuery.message?.chat?.id;
         if (!chatId) return;
 
+        const firstName = from.first_name || undefined;
+        const lastName = from.last_name || undefined;
+        const telegramUsername = from.username || undefined;
         const message: IncomingMessage = {
           channel: 'telegram',
           userId: String(from.id),
           chatId: String(chatId),
-          userName: [from.first_name, from.last_name].filter(Boolean).join(' '),
+          userName: [firstName, lastName].filter(Boolean).join(' ') || telegramUsername || String(from.id),
+          telegramUsername,
+          firstName,
+          lastName,
           messageId: String(cbQuery.message?.message_id ?? Date.now()),
           timestamp: new Date(),
           type: 'text',

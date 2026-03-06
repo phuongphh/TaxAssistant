@@ -55,6 +55,17 @@ def build_memory_context(
     ctype = _CUSTOMER_TYPE_LABELS.get(customer.get("customer_type", ""), "Chưa xác định")
     parts.append(f"Loại: {ctype}")
 
+    # Identity info - use display_name or first_name for greeting context
+    display_name = (
+        customer.get("display_name")
+        or customer.get("first_name")
+        or customer.get("username")
+    )
+    if display_name:
+        parts.append(f"Tên người dùng: {display_name}")
+    if customer.get("username"):
+        parts.append(f"Username: @{customer['username']}")
+
     if customer.get("business_name"):
         parts.append(f"Tên: {customer['business_name']}")
     if customer.get("tax_code"):

@@ -95,6 +95,12 @@ class Customer(Base):
     channel: Mapped[str] = mapped_column(String(20), nullable=False)
     channel_user_id: Mapped[str] = mapped_column(String(100), nullable=False)
 
+    # Telegram/platform identity fields (populated from first message)
+    username: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    first_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    last_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    display_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+
     # Business info (collected during onboarding)
     customer_type: Mapped[str] = mapped_column(String(20), default="unknown")
     business_name: Mapped[str | None] = mapped_column(String(200), nullable=True)

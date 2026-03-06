@@ -17,8 +17,17 @@ export interface IncomingMessage {
   /** User identifier on the platform */
   userId: string;
 
-  /** Display name of the user */
+  /** Display name of the user (full name or computed) */
   userName: string;
+
+  /** Platform @username (e.g., Telegram username, may be undefined) */
+  telegramUsername?: string;
+
+  /** First name from platform profile */
+  firstName?: string;
+
+  /** Last name from platform profile */
+  lastName?: string;
 
   /** Conversation/chat ID */
   chatId: string;

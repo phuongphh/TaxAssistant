@@ -70,6 +70,11 @@ export class MessageRouter {
         customerProfile = await this.taxEngine.getOrCreateCustomer(
           message.channel,
           message.userId,
+          {
+            username: message.telegramUsername,
+            firstName: message.firstName,
+            lastName: message.lastName,
+          },
         );
         // Sync customer profile data into session and persist to Redis
         if (customerProfile?.customerId) {

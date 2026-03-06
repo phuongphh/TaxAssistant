@@ -10,6 +10,20 @@ import re
 
 logger = logging.getLogger(__name__)
 
+
+def _get_greeting_name(customer: dict) -> str:
+    """Return the best name to use when greeting this customer.
+
+    Priority: first_name > display_name > username > empty string.
+    """
+    return (
+        customer.get("first_name")
+        or customer.get("display_name")
+        or customer.get("username")
+        or ""
+    )
+
+
 # Service menu shown to customers
 SERVICE_MENU = (
     "Dịch vụ của chúng tôi:\n"
@@ -74,7 +88,7 @@ class OnboardingHandler:
         step = customer.get("onboarding_step", "new")
 
         if step == "new":
-            return self._step_welcome()
+            return self._step_welcome(customer)
         elif step == "collecting_type":
             return self._step_collect_type(message)
         elif step == "collecting_info":
@@ -83,10 +97,12 @@ class OnboardingHandler:
             # Already completed or unknown step
             return self._step_completed(customer)
 
-    def _step_welcome(self) -> dict:
+    def _step_welcome(self, customer: dict) -> dict:
         """First interaction - welcome message + ask customer type."""
+        name = _get_greeting_name(customer)
+        greeting = f"Xin chào {name}! " if name else "Xin chào! "
         reply = (
-            "Xin chào! Tôi là Trợ lý Thuế - hỗ trợ tư vấn thuế cho doanh nghiệp, "
+            f"{greeting}Tôi là Trợ lý Thuế - hỗ trợ tư vấn thuế cho doanh nghiệp, "
             "hộ kinh doanh và cá nhân tại Việt Nam.\n\n"
             f"{SERVICE_MENU}\n\n"
             "Để phục vụ bạn tốt hơn, bạn thuộc nhóm nào?\n"
@@ -221,9 +237,11 @@ class OnboardingHandler:
         if extracted_info:
             info_str = "Thông tin đã ghi nhận: " + ", ".join(extracted_info) + "\n\n"
 
+        name = _get_greeting_name(customer)
+        name_greeting = f" {name}" if name else ""
         reply = (
-            f"Cảm ơn bạn! {info_str}"
-            f"Xin chào {type_label}! Tôi đã sẵn sàng hỗ trợ bạn.\n\n"
+            f"Cảm ơn bạn{name_greeting}! {info_str}"
+            f"Chào mừng {type_label}! Tôi đã sẵn sàng hỗ trợ bạn.\n\n"
             f"{SERVICE_MENU}\n\n"
             "Bạn muốn tôi hỗ trợ dịch vụ nào? (Gõ số hoặc tên dịch vụ)"
         )
@@ -242,7 +260,8 @@ class OnboardingHandler:
 
     def _step_completed(self, customer: dict) -> dict:
         """Customer already onboarded - show service menu for returning customers."""
-        name = customer.get("business_name") or ""
+        # Prefer personal name (username/first_name), fall back to business_name
+        name = _get_greeting_name(customer) or customer.get("business_name") or ""
         greeting = f"Chào {name}! " if name else "Chào bạn! "
 
         reply = (

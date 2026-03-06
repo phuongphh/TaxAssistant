@@ -7,6 +7,10 @@ export interface CustomerProfile {
   customerId: string;
   channel: string;
   channelUserId: string;
+  username: string;
+  firstName: string;
+  lastName: string;
+  displayName: string;
   customerType: string;
   businessName: string;
   taxCode: string;

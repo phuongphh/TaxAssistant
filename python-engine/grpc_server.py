@@ -139,6 +139,10 @@ class TaxEngineServicer(pb2_grpc.TaxEngineServicer):
             if request.HasField("customer_profile") and request.customer_profile.customer_id:
                 customer_profile = {
                     "customer_id": request.customer_profile.customer_id,
+                    "username": request.customer_profile.username,
+                    "first_name": request.customer_profile.first_name,
+                    "last_name": request.customer_profile.last_name,
+                    "display_name": request.customer_profile.display_name,
                     "customer_type": request.customer_profile.customer_type,
                     "business_name": request.customer_profile.business_name,
                     "tax_code": request.customer_profile.tax_code,
@@ -411,8 +415,21 @@ class TaxEngineServicer(pb2_grpc.TaxEngineServicer):
         logger.info("gRPC GetOrCreateCustomer: %s/%s", request.channel, request.channel_user_id)
         async with async_session() as session:
             repo = CustomerRepository(session)
-            customer, is_new = await repo.get_or_create(request.channel, request.channel_user_id)
+            customer, is_new = await repo.get_or_create(
+                request.channel,
+                request.channel_user_id,
+                username=request.username or None,
+                first_name=request.first_name or None,
+                last_name=request.last_name or None,
+            )
             await session.commit()
+            if is_new:
+                logger.info(
+                    "New customer registered: %s/%s display='%s'",
+                    request.channel,
+                    request.channel_user_id,
+                    customer.display_name or "",
+                )
             return self._customer_to_proto(customer)
 
     async def UpdateCustomerProfile(self, request, context):
@@ -491,6 +508,10 @@ class TaxEngineServicer(pb2_grpc.TaxEngineServicer):
             customer_id=str(customer.id),
             channel=customer.channel or "",
             channel_user_id=customer.channel_user_id or "",
+            username=customer.username or "",
+            first_name=customer.first_name or "",
+            last_name=customer.last_name or "",
+            display_name=customer.display_name or "",
             customer_type=customer.customer_type or "unknown",
             business_name=customer.business_name or "",
             tax_code=customer.tax_code or "",

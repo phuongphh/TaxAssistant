@@ -11,13 +11,19 @@ export function mapTelegramMessage(ctx: Context<Update.MessageUpdate>): Incoming
 
   const userId = String(msg.from.id);
   const chatId = String(msg.chat.id);
-  const userName = [msg.from.first_name, msg.from.last_name].filter(Boolean).join(' ');
+  const firstName = msg.from.first_name || undefined;
+  const lastName = msg.from.last_name || undefined;
+  const telegramUsername = msg.from.username || undefined;
+  const userName = [firstName, lastName].filter(Boolean).join(' ') || telegramUsername || userId;
 
   const base = {
     channel: 'telegram' as const,
     userId,
     chatId,
     userName,
+    telegramUsername,
+    firstName,
+    lastName,
     timestamp: new Date(msg.date * 1000),
     raw: msg,
   };
