@@ -123,6 +123,10 @@ export class TaxEngineClient {
         customerId: customerProfile.customerId,
         channel: customerProfile.channel,
         channelUserId: customerProfile.channelUserId,
+        username: customerProfile.username || '',
+        firstName: customerProfile.firstName || '',
+        lastName: customerProfile.lastName || '',
+        displayName: customerProfile.displayName || '',
         customerType: customerProfile.customerType,
         businessName: customerProfile.businessName,
         taxCode: customerProfile.taxCode,
@@ -248,8 +252,18 @@ export class TaxEngineClient {
   /**
    * Get or create a customer profile
    */
-  async getOrCreateCustomer(channel: string, channelUserId: string): Promise<CustomerProfile> {
-    const request = { channel, channelUserId };
+  async getOrCreateCustomer(
+    channel: string,
+    channelUserId: string,
+    userInfo?: { username?: string; firstName?: string; lastName?: string },
+  ): Promise<CustomerProfile> {
+    const request = {
+      channel,
+      channelUserId,
+      username: userInfo?.username || '',
+      firstName: userInfo?.firstName || '',
+      lastName: userInfo?.lastName || '',
+    };
     return new Promise((resolve, reject) => {
       this.client.getOrCreateCustomer(request, { deadline: this.deadline(10000) }, (err: any, response: any) => {
         if (err) {
@@ -260,6 +274,10 @@ export class TaxEngineClient {
             customerId: response.customerId || '',
             channel: response.channel || '',
             channelUserId: response.channelUserId || '',
+            username: response.username || '',
+            firstName: response.firstName || '',
+            lastName: response.lastName || '',
+            displayName: response.displayName || '',
             customerType: response.customerType || 'unknown',
             businessName: response.businessName || '',
             taxCode: response.taxCode || '',
