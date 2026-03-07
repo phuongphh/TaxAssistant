@@ -8,6 +8,11 @@ services:
     build:
       context: .
       dockerfile: node-gateway/Dockerfile
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+    dns_search:
+      - .
     ports:
       - "3000:3000"     # REST API
       - "3001:3001"     # Webhook endpoints
@@ -43,6 +48,11 @@ services:
     build:
       context: .
       dockerfile: python-engine/Dockerfile
+    dns: 
+    - 8.8.8.8
+    - 1.1.1.1
+    dns_search:
+    - .
     ports:
       - "8000:8000"     # REST API
       - "50051:50051"   # gRPC
