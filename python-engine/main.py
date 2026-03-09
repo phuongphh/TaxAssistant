@@ -5,15 +5,21 @@ Runs both FastAPI (REST) and gRPC servers concurrently.
 
 import asyncio
 import logging
+import os
 import signal
 
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
 
 from config import settings
 from api.routes import health, tax
+from api.routes import portal as portal_routes
 from grpc_server import serve_grpc
+from portal.scheduler import run_scheduler
 
 logging.basicConfig(
     level=logging.DEBUG if settings.debug else logging.INFO,
@@ -43,6 +49,24 @@ def create_app() -> FastAPI:
     # Routes
     app.include_router(health.router)
     app.include_router(tax.router)
+    app.include_router(portal_routes.router)
+
+    # Portal static files & templates
+    _portal_dir = os.path.join(os.path.dirname(__file__), "portal")
+    app.mount(
+        "/portal/static",
+        StaticFiles(directory=os.path.join(_portal_dir, "static")),
+        name="portal_static",
+    )
+    _templates = Jinja2Templates(directory=os.path.join(_portal_dir, "templates"))
+
+    @app.get("/portal/", response_class=HTMLResponse)
+    async def portal_login_page(request: Request):
+        return _templates.TemplateResponse("login.html", {"request": request})
+
+    @app.get("/portal/dashboard", response_class=HTMLResponse)
+    async def portal_dashboard_page(request: Request):
+        return _templates.TemplateResponse("dashboard.html", {"request": request})
 
     return app
 
@@ -84,6 +108,9 @@ async def main() -> None:
     )
     rest_server = uvicorn.Server(config)
 
+    # Start portal metrics scheduler
+    scheduler_task = asyncio.create_task(run_scheduler())
+
     # Run both servers
     async def run_rest():
         await rest_server.serve()
@@ -91,6 +118,7 @@ async def main() -> None:
     async def wait_shutdown():
         await shutdown_event.wait()
         logger.info("Shutting down servers...")
+        scheduler_task.cancel()
         await grpc_server.stop(grace=5)
         rest_server.should_exit = True
 
