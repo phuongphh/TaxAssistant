@@ -5,7 +5,7 @@ SQLAlchemy models for Tax Assistant persistent data.
 import uuid
 from datetime import date, datetime
 
-from sqlalchemy import Date, DateTime, Float, ForeignKey, Index, String, Text, UniqueConstraint, func, text
+from sqlalchemy import BigInteger, Date, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, func, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -197,3 +197,28 @@ class ConversationSummary(Base):
 
     # Relationships
     customer: Mapped["Customer"] = relationship(back_populates="conversation_summaries")
+
+
+class MetricsSnapshot(Base):
+    """Hourly aggregated metrics snapshots for the portal dashboard."""
+
+    __tablename__ = "metrics_snapshots"
+    __table_args__ = (
+        Index("idx_snapshots_at", "snapshot_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    snapshot_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    total_users: Mapped[int] = mapped_column(Integer, default=0)
+    active_users_day: Mapped[int] = mapped_column(Integer, default=0)
+    active_users_month: Mapped[int] = mapped_column(Integer, default=0)
+    new_users_day: Mapped[int] = mapped_column(Integer, default=0)
+    new_users_month: Mapped[int] = mapped_column(Integer, default=0)
+    new_users_year: Mapped[int] = mapped_column(Integer, default=0)
+
+    segmentation_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True, default=dict)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
