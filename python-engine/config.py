@@ -39,11 +39,6 @@ class Settings(BaseSettings):
     tesseract_lang: str = "vie"
     max_upload_size_mb: int = 10
 
-    # Portal
-    portal_admin_username: str = "admin"
-    portal_admin_password_hash: str = ""
-    portal_secret_key: str = "change-me-in-production"
-
     @property
     def is_production(self) -> bool:
         return self.environment == "production"
