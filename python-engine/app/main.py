@@ -11,9 +11,15 @@ import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from pathlib import Path
+
+from fastapi.staticfiles import StaticFiles
+
 from app.config import settings
-from app.api.routes import health, tax
+from app.api.routes import health, tax, portal
 from app.grpc_server import serve_grpc
+
+PORTAL_DIR = Path(__file__).resolve().parent / "portal"
 
 logging.basicConfig(
     level=logging.DEBUG if settings.debug else logging.INFO,
@@ -43,6 +49,14 @@ def create_app() -> FastAPI:
     # Routes
     app.include_router(health.router)
     app.include_router(tax.router)
+    app.include_router(portal.router)
+
+    # Serve portal static files (CSS, JS)
+    app.mount(
+        "/portal/static",
+        StaticFiles(directory=str(PORTAL_DIR / "static")),
+        name="portal-static",
+    )
 
     return app
 

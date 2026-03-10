@@ -5,9 +5,10 @@ Provides authentication and metrics endpoints for the admin portal.
 
 import logging
 from datetime import date, timedelta
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from itsdangerous import BadSignature, URLSafeTimedSerializer
 from passlib.hash import bcrypt
 
@@ -18,6 +19,8 @@ from app.db.portal_repository import PortalRepository
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/portal", tags=["portal"])
+
+_TEMPLATES_DIR = Path(__file__).resolve().parent.parent.parent / "portal" / "templates"
 
 _serializer = URLSafeTimedSerializer(settings.portal_secret_key)
 SESSION_COOKIE = "portal_session"
@@ -47,6 +50,34 @@ def _get_current_user(request: Request) -> str:
     if not data:
         raise HTTPException(status_code=401, detail="Session expired")
     return data["user"]
+
+
+# ---------------------------------------------------------------------------
+# HTML page routes
+# ---------------------------------------------------------------------------
+
+@router.get("/", response_class=HTMLResponse)
+async def portal_index(request: Request):
+    """Redirect to login page."""
+    return RedirectResponse(url="/portal/login")
+
+
+@router.get("/login", response_class=HTMLResponse)
+async def login_page(request: Request):
+    """Serve the login page. If already authenticated, redirect to dashboard."""
+    token = request.cookies.get(SESSION_COOKIE)
+    if token and _verify_session_token(token):
+        return RedirectResponse(url="/portal/dashboard")
+    return HTMLResponse((_TEMPLATES_DIR / "login.html").read_text())
+
+
+@router.get("/dashboard", response_class=HTMLResponse)
+async def dashboard_page(request: Request):
+    """Serve the dashboard page. Requires authentication."""
+    token = request.cookies.get(SESSION_COOKIE)
+    if not token or not _verify_session_token(token):
+        return RedirectResponse(url="/portal/login")
+    return HTMLResponse((_TEMPLATES_DIR / "dashboard.html").read_text())
 
 
 # ---------------------------------------------------------------------------
