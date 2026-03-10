@@ -1,7 +1,4 @@
-import fetch from 'node-fetch';
-// Patch global fetch TRƯỚC KHI telegraf load — v4 dùng global fetch
-(globalThis as any).fetch = fetch;
-(globalThis as any).Headers = (fetch as any).Headers;
+// Node 20+ provides native fetch & Headers — no polyfill needed.
 import { Telegraf, Context } from 'telegraf';
 import { Update } from 'telegraf/types';
 import { config } from '../../config';
