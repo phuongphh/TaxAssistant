@@ -14,8 +14,8 @@ services:
     dns_search:
       - .
     ports:
-      - "3000:3000"     # REST API
-      - "3001:3001"     # Webhook endpoints
+      - "3000:3000" # REST API
+      - "3001:3001" # Webhook endpoints
     environment:
       - NODE_ENV=development
       - PORT=3000
@@ -28,7 +28,7 @@ services:
       - TELEGRAM_BOT_TOKEN=8683725208:AAHZgHtFWtWUPQwdcJiLZN0CDDDSa-Gxg2c
     # Dev mode: run TypeScript directly with hot-reload via tsx
     # (volume mount ./node-gateway/src:/app/src makes source edits live)
-    command: ["npx", "tsx", "watch", "src/index.ts"]
+    command: [ "npx", "tsx", "watch", "src/index.ts" ]
     depends_on:
       redis:
         condition: service_healthy
@@ -48,14 +48,14 @@ services:
     build:
       context: .
       dockerfile: python-engine/Dockerfile
-    dns: 
-    - 8.8.8.8
-    - 1.1.1.1
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
     dns_search:
-    - .
+      - .
     ports:
-      - "8000:8000"     # REST API
-      - "50051:50051"   # gRPC
+      - "8000:8000" # REST API
+      - "50051:50051" # gRPC
     environment:
       - ENVIRONMENT=development
       - POSTGRES_URL=postgresql+asyncpg://taxapp:taxapp_dev@postgres:5432/taxassistant
@@ -75,7 +75,10 @@ services:
       - ./python-engine/app:/app/app
       - ./proto:/proto
     restart: unless-stopped
-
+  cloudflare-tunnel:
+    image: cloudflare/cloudflared:latest
+    restart: always
+    command: tunnel --no-autoupdate run --token eyJhIjoiM2E0NzU4M2Q1NmUwOWJmYjhiY2FhZWZkZWJlY2I5MDkiLCJ0IjoiMmFjYWUxZGUtMGFlMC00ZWYzLWE1ODMtZmZmMTA4YTQ2MDI3IiwicyI6Ik1tUTBZV0kxTkRNdE1tVTBPUzAwWXpJMExUZ3pOell0TjJSaVlUTXdNRFk1WmpGayJ9
   # ============================
   # PostgreSQL
   # ============================
@@ -90,7 +93,7 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U taxapp -d taxassistant"]
+      test: [ "CMD-SHELL", "pg_isready -U taxapp -d taxassistant" ]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -105,7 +108,7 @@ services:
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: [ "CMD", "redis-cli", "ping" ]
       interval: 5s
       timeout: 5s
       retries: 5
