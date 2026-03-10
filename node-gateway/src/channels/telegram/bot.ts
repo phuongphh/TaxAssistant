@@ -1,7 +1,4 @@
-import fetch from 'node-fetch';
-// Patch global fetch TRƯỚC KHI telegraf load — v4 dùng global fetch
-(globalThis as any).fetch = fetch;
-(globalThis as any).Headers = (fetch as any).Headers;
+// Node 20+ provides native fetch & Headers — no polyfill needed.
 import { Telegraf, Context } from 'telegraf';
 import { Update } from 'telegraf/types';
 import { config } from '../../config';
@@ -139,7 +136,12 @@ export class TelegramAdapter implements ChannelAdapter {
       });
       logger.info('Telegram webhook set', { url: config.telegram.webhookUrl });
     } else {
-      await this.bot.launch();
+      // Drop any stale polling session / webhook before starting fresh.
+      // Prevents "terminated by other getUpdates request" conflict when a
+      // previous process didn't shut down cleanly (container restart,
+      // tsx watch reload, etc.).
+      await this.bot.telegram.deleteWebhook({ drop_pending_updates: false });
+      await this.bot.launch({ dropPendingUpdates: false });
       logger.info('Telegram bot started in polling mode');
     }
   }
@@ -214,7 +216,11 @@ export class TelegramAdapter implements ChannelAdapter {
   }
 
   async shutdown(): Promise<void> {
-    this.bot.stop('SIGTERM');
+    try {
+      this.bot.stop('SIGTERM');
+    } catch {
+      // bot.stop() may throw if already stopped
+    }
     logger.info('Telegram bot stopped');
   }
 }
