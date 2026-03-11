@@ -47,14 +47,27 @@ export class TelegramAdapter implements ChannelAdapter {
   readonly channel = 'telegram' as const;
   private bot: Telegraf;
   private messageHandler: MessageHandler | null = null;
+  private lastUpdateTime = Date.now();
+  private watchdogTimer: ReturnType<typeof setInterval> | null = null;
+
+  /** Check if bot polling is considered alive (received update within threshold) */
+  isPollingHealthy(thresholdMs = 120_000): boolean {
+    return Date.now() - this.lastUpdateTime < thresholdMs;
+  }
 
   constructor() {
     this.bot = new Telegraf(config.telegram.botToken);
   }
 
   async initialize(): Promise<void> {
+    // === Global error handler — catches middleware & handler errors ===
+    this.bot.catch((err: unknown) => {
+      logger.error('Telegraf caught error', { error: err });
+    });
+
     // Register message handler
     this.bot.on('message', async (ctx: Context<Update.MessageUpdate>) => {
+      this.lastUpdateTime = Date.now();
       try {
         const message = mapTelegramMessage(ctx);
         if (message && this.messageHandler) {
@@ -67,6 +80,7 @@ export class TelegramAdapter implements ChannelAdapter {
 
     // Handle inline keyboard button clicks (callback_query)
     this.bot.on('callback_query', async (ctx) => {
+      this.lastUpdateTime = Date.now();
       try {
         // Acknowledge the callback to remove loading state on the button
         await ctx.answerCbQuery();
@@ -143,6 +157,23 @@ export class TelegramAdapter implements ChannelAdapter {
       await this.bot.telegram.deleteWebhook({ drop_pending_updates: false });
       await this.bot.launch({ dropPendingUpdates: false });
       logger.info('Telegram bot started in polling mode');
+
+      // Watchdog: if no updates received for 2 minutes, restart polling.
+      // Telegraf polling can silently die after network hiccups.
+      this.watchdogTimer = setInterval(async () => {
+        if (!this.isPollingHealthy()) {
+          logger.warn('Telegram polling watchdog: no updates for 2 min, restarting polling');
+          try {
+            this.bot.stop('SIGTERM');
+            await this.bot.telegram.deleteWebhook({ drop_pending_updates: false });
+            await this.bot.launch({ dropPendingUpdates: false });
+            this.lastUpdateTime = Date.now();
+            logger.info('Telegram polling restarted by watchdog');
+          } catch (err) {
+            logger.error('Watchdog failed to restart polling', { error: err });
+          }
+        }
+      }, 60_000);
     }
   }
 
@@ -216,6 +247,10 @@ export class TelegramAdapter implements ChannelAdapter {
   }
 
   async shutdown(): Promise<void> {
+    if (this.watchdogTimer) {
+      clearInterval(this.watchdogTimer);
+      this.watchdogTimer = null;
+    }
     try {
       this.bot.stop('SIGTERM');
     } catch {
