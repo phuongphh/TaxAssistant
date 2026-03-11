@@ -106,16 +106,34 @@ export class TelegramAdapter implements ChannelAdapter {
 
     // Bot commands
     this.bot.command('start', async (ctx) => {
-      await ctx.reply(
-        'Xin chào! Tôi là Trợ lý Thuế ảo. 🇻🇳\n\n' +
-        'Tôi có thể hỗ trợ bạn các vấn đề về:\n' +
-        '• Thuế GTGT (VAT)\n' +
-        '• Thuế thu nhập doanh nghiệp (CIT)\n' +
-        '• Thuế thu nhập cá nhân (PIT)\n' +
-        '• Thuế môn bài\n' +
-        '• Kê khai và nộp thuế\n\n' +
-        'Hãy gửi câu hỏi của bạn để tôi hỗ trợ!',
-      );
+      try {
+        await ctx.reply(
+          'Xin chào! Tôi là Trợ lý Thuế ảo. 🇻🇳\n\n' +
+          'Tôi có thể hỗ trợ bạn các vấn đề về:\n' +
+          '• Thuế GTGT (VAT)\n' +
+          '• Thuế thu nhập doanh nghiệp (CIT)\n' +
+          '• Thuế thu nhập cá nhân (PIT)\n' +
+          '• Thuế môn bài\n' +
+          '• Kê khai và nộp thuế\n\n' +
+          'Hãy gửi câu hỏi của bạn để tôi hỗ trợ!',
+        );
+        logger.info('/start command processed successfully', { 
+          userId: ctx.from?.id,
+          chatId: ctx.chat?.id 
+        });
+      } catch (error) {
+        logger.error('Failed to process /start command', { 
+          error,
+          userId: ctx.from?.id,
+          chatId: ctx.chat?.id 
+        });
+        // Try to send error message to user
+        try {
+          await ctx.reply('Xin lỗi, có lỗi xảy ra khi xử lý lệnh /start. Vui lòng thử lại sau.');
+        } catch {
+          // Ignore if we can't send error message
+        }
+      }
     });
 
     this.bot.command('help', async (ctx) => {
@@ -217,10 +235,30 @@ export class TelegramAdapter implements ChannelAdapter {
 
   async shutdown(): Promise<void> {
     try {
+      logger.info('Shutting down Telegram bot gracefully...');
+      
+      // Stop receiving new updates first
       this.bot.stop('SIGTERM');
-    } catch {
-      // bot.stop() may throw if already stopped
+      
+      // Delete webhook to clean up Telegram state (prevents conflict on restart)
+      try {
+        await this.bot.telegram.deleteWebhook({ drop_pending_updates: true });
+      } catch (webhookError) {
+        logger.warn('Could not delete webhook during shutdown', { error: webhookError });
+      }
+      
+      // Wait a moment for cleanup
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      
+      logger.info('Telegram bot stopped gracefully');
+    } catch (error) {
+      logger.error('Error during Telegram bot shutdown', { error });
+      // Force stop if graceful shutdown fails
+      try {
+        this.bot.stop();
+      } catch {
+        // Ignore any further errors
+      }
     }
-    logger.info('Telegram bot stopped');
   }
 }
