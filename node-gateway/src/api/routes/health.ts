@@ -28,8 +28,8 @@ router.get('/health', async (_req: Request, res: Response) => {
     checks.redis = 'error';
   }
 
-  // Check Telegram polling (only in non-production / polling mode)
-  if (_telegramAdapter && !(config.app.isProduction && config.telegram.webhookUrl)) {
+  // Check Telegram polling health (only relevant when using polling, not webhook)
+  if (_telegramAdapter && !config.telegram.webhookUrl) {
     checks.telegramPolling = _telegramAdapter.isPollingHealthy() ? 'ok' : 'error';
   }
 

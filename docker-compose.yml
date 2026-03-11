@@ -26,6 +26,8 @@ services:
       - PYTHON_GRPC_PORT=50051
       - PYTHON_REST_URL=http://tax-engine:8000
       - TELEGRAM_BOT_TOKEN=8683725208:AAHZgHtFWtWUPQwdcJiLZN0CDDDSa-Gxg2c
+      - TELEGRAM_WEBHOOK_URL=${TELEGRAM_WEBHOOK_URL:-}
+      - TELEGRAM_WEBHOOK_SECRET=${TELEGRAM_WEBHOOK_SECRET:-}
     # Dev mode: run TypeScript directly with hot-reload via tsx
     # (volume mount ./node-gateway/src:/app/src makes source edits live)
     command: [ "npx", "tsx", "watch", "src/index.ts" ]
