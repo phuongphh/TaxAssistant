@@ -26,6 +26,8 @@ services:
       - PYTHON_GRPC_PORT=50051
       - PYTHON_REST_URL=http://tax-engine:8000
       - TELEGRAM_BOT_TOKEN=8683725208:AAHZgHtFWtWUPQwdcJiLZN0CDDDSa-Gxg2c
+      - TELEGRAM_WEBHOOK_URL=${TELEGRAM_WEBHOOK_URL:-}
+      - TELEGRAM_WEBHOOK_SECRET=${TELEGRAM_WEBHOOK_SECRET:-}
     # Dev mode: run TypeScript directly with hot-reload via tsx
     # (volume mount ./node-gateway/src:/app/src makes source edits live)
     command: [ "npx", "tsx", "watch", "src/index.ts" ]
@@ -41,7 +43,7 @@ services:
       - ./proto:/proto
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1))"]
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/health/live', (r) => process.exit(r.statusCode === 200 ? 0 : 1))"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -51,9 +53,6 @@ services:
         limits:
           memory: 512M
           cpus: '1.0'
-        reservations:
-          memory: 256M
-          cpus: '0.5'
 
   # ============================
   # Python Tax Engine Service

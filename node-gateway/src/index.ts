@@ -7,6 +7,7 @@ import { ZaloAdapter } from './channels/zalo/oa';
 import { TaxEngineClient } from './grpc/client';
 import { MessageRouter } from './router/messageRouter';
 import { createServer } from './api/server';
+import { setTelegramAdapter } from './api/routes/health';
 
 async function bootstrap(): Promise<void> {
   logger.info('Starting Tax Assistant Gateway...', { env: config.app.env });
@@ -35,6 +36,9 @@ async function bootstrap(): Promise<void> {
   // === Start channel adapters ===
   await telegramAdapter.initialize();
   await zaloAdapter.initialize();
+
+  // Expose adapter to health check so it can report polling status
+  setTelegramAdapter(telegramAdapter);
 
   // === Start HTTP server ===
   const app = createServer({ sessionStore, zaloAdapter, telegramAdapter });

@@ -25,9 +25,9 @@ jobs:
         id: extract
         run: |
           BRANCH="${{ github.ref_name }}"
-          ISSUE_NUMBER=$(echo "$BRANCH" | grep -oP '(?<=issue-)\d+')
+          ISSUE_NUMBER=$(echo "$BRANCH" | grep -oP '(?<=issue-)\d+' || echo "")
           echo "issue_number=$ISSUE_NUMBER" >> $GITHUB_OUTPUT
-          echo "Found issue number: $ISSUE_NUMBER"
+          echo "Found issue number: ${ISSUE_NUMBER:-none}"
 
       # -------------------------------------------------------
       # BƯỚC 2: Chuyển Issue sang "In Progress" trên Project board
@@ -127,43 +127,57 @@ jobs:
             console.log(`✅ Issue #${issueNumber} moved to In Progress`);
 
       # -------------------------------------------------------
-      # BƯỚC 3: Tạo Pull Request
+      # BƯỚC 3: Tạo PR với "Closes #N" trong body
+      # Dùng gh CLI thay vì peter-evans/create-pull-request
+      # vì action đó chỉ output PR number khi tạo mới,
+      # không output khi PR đã tồn tại → step link bị skip
       # -------------------------------------------------------
-      - name: Create Pull Request
-        id: create-pr
-        uses: peter-evans/create-pull-request@v6
-        with:
-          token: ${{ secrets.PAT_TOKEN }}
-          branch: ${{ github.ref }}
-          base: main
-          title: "Auto PR from Claude"
-          body: "AI generated implementation"
+      - name: Create or update Pull Request
+        if: steps.extract.outputs.issue_number != ''
+        env:
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+        run: |
+          BRANCH="${{ github.ref_name }}"
+          ISSUE_NUMBER="${{ steps.extract.outputs.issue_number }}"
 
-      # -------------------------------------------------------
-      # BƯỚC 4: Link PR với Issue
-      # Thêm "Closes #issue_number" vào body của PR
-      # GitHub tự động link khi body có từ khóa "Closes #N"
-      # Điều này trigger workflow "Pull request linked to issue"
-      # → tự động chuyển sang "In Review"
-      # -------------------------------------------------------
-      - name: Link PR to Issue
-        if: |
-          steps.extract.outputs.issue_number != '' &&
-          steps.create-pr.outputs.pull-request-number != ''
-        uses: actions/github-script@v6
-        with:
-          github-token: ${{ secrets.PAT_TOKEN }}
-          script: |
-            const issueNumber = '${{ steps.extract.outputs.issue_number }}';
-            const prNumber = '${{ steps.create-pr.outputs.pull-request-number }}';
+          # Kiểm tra PR đã tồn tại cho branch này chưa
+          EXISTING_PR=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number' 2>/dev/null || echo "")
 
-            // Cập nhật body của PR để chứa "Closes #N"
-            // GitHub sẽ tự động link PR với Issue
-            await github.rest.pulls.update({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              pull_number: parseInt(prNumber),
-              body: `AI generated implementation\n\nCloses #${issueNumber}`
-            });
+          if [ -n "$EXISTING_PR" ]; then
+            echo "PR #$EXISTING_PR already exists, updating body to link issue..."
+            gh pr edit "$EXISTING_PR" \
+              --body "AI generated implementation
 
-            console.log(`✅ PR #${prNumber} linked to Issue #${issueNumber}`);
+          Closes #${ISSUE_NUMBER}"
+            echo "✅ Updated PR #$EXISTING_PR with Closes #${ISSUE_NUMBER}"
+          else
+            echo "Creating new PR..."
+            NEW_PR=$(gh pr create \
+              --base main \
+              --head "$BRANCH" \
+              --title "Auto PR from Claude — Issue #${ISSUE_NUMBER}" \
+              --body "AI generated implementation
+
+          Closes #${ISSUE_NUMBER}")
+            echo "✅ Created PR: $NEW_PR"
+          fi
+
+      # Fallback: branch không chứa issue number → tạo PR không link
+      - name: Create Pull Request (no issue link)
+        if: steps.extract.outputs.issue_number == ''
+        env:
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+        run: |
+          BRANCH="${{ github.ref_name }}"
+          EXISTING_PR=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number' 2>/dev/null || echo "")
+
+          if [ -z "$EXISTING_PR" ]; then
+            gh pr create \
+              --base main \
+              --head "$BRANCH" \
+              --title "Auto PR from Claude" \
+              --body "AI generated implementation"
+            echo "✅ Created PR without issue link"
+          else
+            echo "PR #$EXISTING_PR already exists, skipping"
+          fi

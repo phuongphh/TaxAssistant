@@ -36,8 +36,8 @@ export function createServer(deps: ServerDependencies): Express {
   app.use(healthRouter);
 
   // === Webhook routes ===
-  // Telegram webhook (production only)
-  if (config.app.isProduction && config.telegram.webhookUrl) {
+  // Telegram webhook — mount whenever webhook URL is configured (any env)
+  if (config.telegram.webhookUrl) {
     app.use(deps.telegramAdapter.getWebhookCallback());
   }
 

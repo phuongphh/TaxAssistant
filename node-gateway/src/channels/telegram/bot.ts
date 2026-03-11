@@ -47,14 +47,27 @@ export class TelegramAdapter implements ChannelAdapter {
   readonly channel = 'telegram' as const;
   private bot: Telegraf;
   private messageHandler: MessageHandler | null = null;
+  private lastUpdateTime = Date.now();
+  private watchdogTimer: ReturnType<typeof setInterval> | null = null;
+
+  /** Check if bot polling is considered alive (received update within threshold) */
+  isPollingHealthy(thresholdMs = 120_000): boolean {
+    return Date.now() - this.lastUpdateTime < thresholdMs;
+  }
 
   constructor() {
     this.bot = new Telegraf(config.telegram.botToken);
   }
 
   async initialize(): Promise<void> {
+    // === Global error handler — catches middleware & handler errors ===
+    this.bot.catch((err: unknown) => {
+      logger.error('Telegraf caught error', { error: err });
+    });
+
     // Register message handler
     this.bot.on('message', async (ctx: Context<Update.MessageUpdate>) => {
+      this.lastUpdateTime = Date.now();
       try {
         const message = mapTelegramMessage(ctx);
         if (message && this.messageHandler) {
@@ -67,6 +80,7 @@ export class TelegramAdapter implements ChannelAdapter {
 
     // Handle inline keyboard button clicks (callback_query)
     this.bot.on('callback_query', async (ctx) => {
+      this.lastUpdateTime = Date.now();
       try {
         // Acknowledge the callback to remove loading state on the button
         await ctx.answerCbQuery();
@@ -147,20 +161,39 @@ export class TelegramAdapter implements ChannelAdapter {
       );
     });
 
-    // Setup webhook or polling based on environment
-    if (config.app.isProduction && config.telegram.webhookUrl) {
+    // Setup webhook or polling.
+    // Prefer webhook when TELEGRAM_WEBHOOK_URL is set (any environment).
+    // Webhook is push-based → no long-polling, no watchdog, no burst API
+    // calls that can interfere with other Telegram bots on the same host.
+    if (config.telegram.webhookUrl) {
       await this.bot.telegram.setWebhook(config.telegram.webhookUrl, {
         secret_token: config.telegram.webhookSecret,
       });
       logger.info('Telegram webhook set', { url: config.telegram.webhookUrl });
     } else {
-      // Drop any stale polling session / webhook before starting fresh.
-      // Prevents "terminated by other getUpdates request" conflict when a
-      // previous process didn't shut down cleanly (container restart,
-      // tsx watch reload, etc.).
+      // Fallback: polling mode (local dev without tunnel).
       await this.bot.telegram.deleteWebhook({ drop_pending_updates: false });
       await this.bot.launch({ dropPendingUpdates: false });
       logger.info('Telegram bot started in polling mode');
+
+      // Watchdog: restart polling if no updates for 10 minutes.
+      // Threshold is generous to avoid unnecessary restarts when the bot
+      // simply has no incoming messages (previously 2 min — too aggressive,
+      // caused burst API calls every 60s that interfered with other bots).
+      this.watchdogTimer = setInterval(async () => {
+        if (!this.isPollingHealthy(600_000)) {
+          logger.warn('Telegram polling watchdog: no updates for 10 min, restarting polling');
+          try {
+            this.bot.stop('SIGTERM');
+            await this.bot.telegram.deleteWebhook({ drop_pending_updates: false });
+            await this.bot.launch({ dropPendingUpdates: false });
+            this.lastUpdateTime = Date.now();
+            logger.info('Telegram polling restarted by watchdog');
+          } catch (err) {
+            logger.error('Watchdog failed to restart polling', { error: err });
+          }
+        }
+      }, 300_000); // Check every 5 minutes instead of every 60s
     }
   }
 
@@ -234,6 +267,10 @@ export class TelegramAdapter implements ChannelAdapter {
   }
 
   async shutdown(): Promise<void> {
+    if (this.watchdogTimer) {
+      clearInterval(this.watchdogTimer);
+      this.watchdogTimer = null;
+    }
     try {
       logger.info('Shutting down Telegram bot gracefully...');
       
