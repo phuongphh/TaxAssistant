@@ -143,26 +143,28 @@ export class TelegramAdapter implements ChannelAdapter {
       );
     });
 
-    // Setup webhook or polling based on environment
-    if (config.app.isProduction && config.telegram.webhookUrl) {
+    // Setup webhook or polling.
+    // Prefer webhook when TELEGRAM_WEBHOOK_URL is set (any environment).
+    // Webhook is push-based → no long-polling, no watchdog, no burst API
+    // calls that can interfere with other Telegram bots on the same host.
+    if (config.telegram.webhookUrl) {
       await this.bot.telegram.setWebhook(config.telegram.webhookUrl, {
         secret_token: config.telegram.webhookSecret,
       });
       logger.info('Telegram webhook set', { url: config.telegram.webhookUrl });
     } else {
-      // Drop any stale polling session / webhook before starting fresh.
-      // Prevents "terminated by other getUpdates request" conflict when a
-      // previous process didn't shut down cleanly (container restart,
-      // tsx watch reload, etc.).
+      // Fallback: polling mode (local dev without tunnel).
       await this.bot.telegram.deleteWebhook({ drop_pending_updates: false });
       await this.bot.launch({ dropPendingUpdates: false });
       logger.info('Telegram bot started in polling mode');
 
-      // Watchdog: if no updates received for 2 minutes, restart polling.
-      // Telegraf polling can silently die after network hiccups.
+      // Watchdog: restart polling if no updates for 10 minutes.
+      // Threshold is generous to avoid unnecessary restarts when the bot
+      // simply has no incoming messages (previously 2 min — too aggressive,
+      // caused burst API calls every 60s that interfered with other bots).
       this.watchdogTimer = setInterval(async () => {
-        if (!this.isPollingHealthy()) {
-          logger.warn('Telegram polling watchdog: no updates for 2 min, restarting polling');
+        if (!this.isPollingHealthy(600_000)) {
+          logger.warn('Telegram polling watchdog: no updates for 10 min, restarting polling');
           try {
             this.bot.stop('SIGTERM');
             await this.bot.telegram.deleteWebhook({ drop_pending_updates: false });
@@ -173,7 +175,7 @@ export class TelegramAdapter implements ChannelAdapter {
             logger.error('Watchdog failed to restart polling', { error: err });
           }
         }
-      }, 60_000);
+      }, 300_000); // Check every 5 minutes instead of every 60s
     }
   }
 
