@@ -2,26 +2,25 @@
 PIT (Thuế Thu Nhập Cá Nhân - TNCN) rules.
 
 Key references:
-- Luật Thuế TNCN số 04/2007/QH12 (sửa đổi, bổ sung)
-- Thông tư 111/2013/TT-BTC
-- Nghị quyết 954/2020/UBTVQH14 (mức giảm trừ gia cảnh)
+- Luật Thuế TNCN số 109/2025/QH15 (có hiệu lực từ 01/07/2026,
+  áp dụng cho thu nhập từ tiền lương từ kỳ tính thuế 2026)
+- Nghị quyết 110/2025/UBTVQH15 (điều chỉnh giảm trừ gia cảnh, từ 01/01/2026)
+- Thông tư 111/2013/TT-BTC (hướng dẫn, vẫn áp dụng phần không mâu thuẫn)
 """
 
 from .base import CustomerType, TaxCategory, TaxContext, TaxResult, TaxRule
 
-# Mức giảm trừ gia cảnh (Personal deduction)
-PERSONAL_DEDUCTION = 11_000_000  # 11 triệu VND/tháng cho bản thân
-DEPENDENT_DEDUCTION = 4_400_000  # 4.4 triệu VND/tháng/người phụ thuộc
+# Mức giảm trừ gia cảnh (Personal deduction) - NQ 110/2025/UBTVQH15
+PERSONAL_DEDUCTION = 15_500_000  # 15.5 triệu VND/tháng cho bản thân
+DEPENDENT_DEDUCTION = 6_200_000  # 6.2 triệu VND/tháng/người phụ thuộc
 
-# Biểu thuế lũy tiến từng phần (Progressive tax brackets) - tháng
+# Biểu thuế lũy tiến từng phần 5 bậc - Luật 109/2025/QH15
 PIT_BRACKETS = [
-    (5_000_000, 0.05),  # Đến 5 triệu: 5%
-    (10_000_000, 0.10),  # Trên 5 - 10 triệu: 10%
-    (18_000_000, 0.15),  # Trên 10 - 18 triệu: 15%
-    (32_000_000, 0.20),  # Trên 18 - 32 triệu: 20%
-    (52_000_000, 0.25),  # Trên 32 - 52 triệu: 25%
-    (80_000_000, 0.30),  # Trên 52 - 80 triệu: 30%
-    (float("inf"), 0.35),  # Trên 80 triệu: 35%
+    (10_000_000, 0.05),   # Đến 10 triệu: 5%
+    (30_000_000, 0.10),   # Trên 10 - 30 triệu: 10%
+    (60_000_000, 0.20),   # Trên 30 - 60 triệu: 20%
+    (100_000_000, 0.30),  # Trên 60 - 100 triệu: 30%
+    (float("inf"), 0.35), # Trên 100 triệu: 35%
 ]
 
 
@@ -64,9 +63,9 @@ class PITRule(TaxRule):
             rate=tax_amount / monthly_income if monthly_income > 0 else 0,
             explanation="\n".join(explanation_lines),
             legal_basis=[
-                "Luật Thuế TNCN số 04/2007/QH12",
+                "Luật Thuế TNCN số 109/2025/QH15",
+                "Nghị quyết 110/2025/UBTVQH15",
                 "Thông tư 111/2013/TT-BTC",
-                "Nghị quyết 954/2020/UBTVQH14",
             ],
         )
 
@@ -97,9 +96,9 @@ class PITRule(TaxRule):
     def get_info(self, customer_type: CustomerType) -> str:
         return (
             "Thuế Thu nhập cá nhân (TNCN):\n"
-            f"• Giảm trừ bản thân: {PERSONAL_DEDUCTION / 1e6:.0f} triệu/tháng\n"
+            f"• Giảm trừ bản thân: {PERSONAL_DEDUCTION / 1e6:.1f} triệu/tháng\n"
             f"• Giảm trừ người phụ thuộc: {DEPENDENT_DEDUCTION / 1e6:.1f} triệu/người/tháng\n"
-            "• Thuế suất: 5% - 35% (biểu lũy tiến 7 bậc)\n"
+            "• Thuế suất: 5% - 35% (biểu lũy tiến 5 bậc)\n"
             "• Kê khai: Hàng tháng hoặc hàng quý\n"
             "• Quyết toán: Hàng năm (trước 31/3 năm sau)"
         )
