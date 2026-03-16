@@ -10,8 +10,15 @@ Key references:
 
 from .base import CustomerType, TaxCategory, TaxContext, TaxResult, TaxRule
 
-CIT_RATE_STANDARD = 0.20  # 20% - Thuế suất phổ thông
-CIT_RATE_SMALL = 0.17  # 17% - DN vừa và nhỏ (doanh thu < 3 tỷ, < 10 LĐ) - theo đề xuất
+# --- Load CIT parameters from config (with hardcoded fallbacks) ---
+try:
+    from data.tax_config_loader import tax_config as _cfg
+    CIT_RATE_STANDARD: float = _cfg.cit_rate_standard
+    CIT_RATE_SMALL: float = _cfg.cit_rate_small
+except Exception:
+    CIT_RATE_STANDARD = 0.20
+    CIT_RATE_SMALL = 0.17
+
 # Revenue threshold for percentage-based method (simplified)
 CIT_REVENUE_THRESHOLD_SIMPLIFIED = 100_000_000  # 100 triệu VND
 

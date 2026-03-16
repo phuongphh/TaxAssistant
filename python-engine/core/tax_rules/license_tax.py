@@ -8,19 +8,33 @@ Key references:
 
 from .base import CustomerType, TaxCategory, TaxContext, TaxResult, TaxRule
 
-# Mức thuế môn bài cho doanh nghiệp (theo vốn điều lệ)
-LICENSE_TAX_ENTERPRISE = [
+# --- Load License Tax parameters from config (with hardcoded fallbacks) ---
+_DEFAULT_ENTERPRISE_TIERS = [
     (10_000_000_000, 3_000_000),  # Vốn > 10 tỷ: 3 triệu/năm
     (0, 2_000_000),  # Vốn ≤ 10 tỷ: 2 triệu/năm
 ]
-
-# Mức thuế môn bài cho hộ kinh doanh (theo doanh thu)
-LICENSE_TAX_HOUSEHOLD = [
+_DEFAULT_HOUSEHOLD_TIERS = [
     (500_000_000, 1_000_000),  # DT > 500 triệu: 1 triệu/năm
     (300_000_000, 500_000),  # DT 300-500 triệu: 500k/năm
     (100_000_000, 300_000),  # DT 100-300 triệu: 300k/năm
     (0, 0),  # DT ≤ 100 triệu: Miễn thuế môn bài
 ]
+
+try:
+    from data.tax_config_loader import tax_config as _cfg
+    _raw_enterprise = _cfg._data.get("license_tax", {}).get("enterprise_tiers")
+    _raw_household = _cfg._data.get("license_tax", {}).get("household_tiers")
+    LICENSE_TAX_ENTERPRISE: list[tuple[int, int]] = (
+        [(t["capital_threshold"], t["amount"]) for t in _raw_enterprise]
+        if _raw_enterprise else _DEFAULT_ENTERPRISE_TIERS
+    )
+    LICENSE_TAX_HOUSEHOLD: list[tuple[int, int]] = (
+        [(t["revenue_threshold"], t["amount"]) for t in _raw_household]
+        if _raw_household else _DEFAULT_HOUSEHOLD_TIERS
+    )
+except Exception:
+    LICENSE_TAX_ENTERPRISE = _DEFAULT_ENTERPRISE_TIERS
+    LICENSE_TAX_HOUSEHOLD = _DEFAULT_HOUSEHOLD_TIERS
 
 
 class LicenseTaxRule(TaxRule):
