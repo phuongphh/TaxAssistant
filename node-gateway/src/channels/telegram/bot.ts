@@ -131,15 +131,15 @@ export class TelegramAdapter implements ChannelAdapter {
           '• Kê khai và nộp thuế\n\n' +
           'Hãy gửi câu hỏi của bạn để tôi hỗ trợ!',
         );
-        logger.info('/start command processed successfully', { 
+        logger.info('/start command processed successfully', {
           userId: ctx.from?.id,
-          chatId: ctx.chat?.id 
+          chatId: ctx.chat?.id
         });
       } catch (error) {
-        logger.error('Failed to process /start command', { 
+        logger.error('Failed to process /start command', {
           error,
           userId: ctx.from?.id,
-          chatId: ctx.chat?.id 
+          chatId: ctx.chat?.id
         });
         // Try to send error message to user
         try {
@@ -173,7 +173,9 @@ export class TelegramAdapter implements ChannelAdapter {
     } else {
       // Fallback: polling mode (local dev without tunnel).
       await this.bot.telegram.deleteWebhook({ drop_pending_updates: false });
-      await this.bot.launch({ dropPendingUpdates: false });
+      this.bot.launch({ dropPendingUpdates: false }).catch((err) => {
+        logger.error('Telegram polling error', { error: err });
+      });
       logger.info('Telegram bot started in polling mode');
 
       // Watchdog: restart polling if no updates for 10 minutes.
@@ -273,20 +275,20 @@ export class TelegramAdapter implements ChannelAdapter {
     }
     try {
       logger.info('Shutting down Telegram bot gracefully...');
-      
+
       // Stop receiving new updates first
       this.bot.stop('SIGTERM');
-      
+
       // Delete webhook to clean up Telegram state (prevents conflict on restart)
       try {
         await this.bot.telegram.deleteWebhook({ drop_pending_updates: true });
       } catch (webhookError) {
         logger.warn('Could not delete webhook during shutdown', { error: webhookError });
       }
-      
+
       // Wait a moment for cleanup
       await new Promise(resolve => setTimeout(resolve, 1000));
-      
+
       logger.info('Telegram bot stopped gracefully');
     } catch (error) {
       logger.error('Error during Telegram bot shutdown', { error });
