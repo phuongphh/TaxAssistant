@@ -6,22 +6,41 @@ Key references:
   áp dụng cho thu nhập từ tiền lương từ kỳ tính thuế 2026)
 - Nghị quyết 110/2025/UBTVQH15 (điều chỉnh giảm trừ gia cảnh, từ 01/01/2026)
 - Thông tư 111/2013/TT-BTC (hướng dẫn, vẫn áp dụng phần không mâu thuẫn)
+
+Tax parameters are loaded from data/tax_config.json at import time.
+To update tax rules, edit tax_config.json and restart the service.
 """
 
 from .base import CustomerType, TaxCategory, TaxContext, TaxResult, TaxRule
 
-# Mức giảm trừ gia cảnh (Personal deduction) - NQ 110/2025/UBTVQH15
-PERSONAL_DEDUCTION = 15_500_000  # 15.5 triệu VND/tháng cho bản thân
-DEPENDENT_DEDUCTION = 6_200_000  # 6.2 triệu VND/tháng/người phụ thuộc
-
-# Biểu thuế lũy tiến từng phần 5 bậc - Luật 109/2025/QH15
-PIT_BRACKETS = [
+# --- Load tax parameters from config (with hardcoded fallbacks) ---
+_DEFAULT_PERSONAL_DEDUCTION = 15_500_000
+_DEFAULT_DEPENDENT_DEDUCTION = 6_200_000
+_DEFAULT_BRACKETS = [
     (10_000_000, 0.05),   # Đến 10 triệu: 5%
     (30_000_000, 0.10),   # Trên 10 - 30 triệu: 10%
     (60_000_000, 0.20),   # Trên 30 - 60 triệu: 20%
     (100_000_000, 0.30),  # Trên 60 - 100 triệu: 30%
     (float("inf"), 0.35), # Trên 100 triệu: 35%
 ]
+_DEFAULT_LEGAL_BASIS = [
+    "Luật Thuế TNCN số 109/2025/QH15",
+    "Nghị quyết 110/2025/UBTVQH15",
+    "Thông tư 111/2013/TT-BTC",
+]
+
+try:
+    from data.tax_config_loader import tax_config as _cfg
+    PERSONAL_DEDUCTION: int = _cfg.pit_personal_deduction
+    DEPENDENT_DEDUCTION: int = _cfg.pit_dependent_deduction
+    PIT_BRACKETS: list[tuple[float, float]] = _cfg.pit_brackets
+    _LEGAL_BASIS: list[str] = _cfg.pit_legal_basis
+except Exception:
+    # Config unavailable (missing file, test environment, etc.) → use defaults
+    PERSONAL_DEDUCTION = _DEFAULT_PERSONAL_DEDUCTION
+    DEPENDENT_DEDUCTION = _DEFAULT_DEPENDENT_DEDUCTION
+    PIT_BRACKETS = _DEFAULT_BRACKETS
+    _LEGAL_BASIS = _DEFAULT_LEGAL_BASIS
 
 
 class PITRule(TaxRule):
@@ -62,11 +81,7 @@ class PITRule(TaxRule):
             amount=tax_amount,
             rate=tax_amount / monthly_income if monthly_income > 0 else 0,
             explanation="\n".join(explanation_lines),
-            legal_basis=[
-                "Luật Thuế TNCN số 109/2025/QH15",
-                "Nghị quyết 110/2025/UBTVQH15",
-                "Thông tư 111/2013/TT-BTC",
-            ],
+            legal_basis=list(_LEGAL_BASIS),
         )
 
     def _calculate_progressive(
@@ -94,11 +109,14 @@ class PITRule(TaxRule):
         return total_tax, breakdown
 
     def get_info(self, customer_type: CustomerType) -> str:
+        min_rate = int(PIT_BRACKETS[0][1] * 100)
+        max_rate = int(PIT_BRACKETS[-1][1] * 100)
+        n_brackets = len(PIT_BRACKETS)
         return (
             "Thuế Thu nhập cá nhân (TNCN):\n"
             f"• Giảm trừ bản thân: {PERSONAL_DEDUCTION / 1e6:.1f} triệu/tháng\n"
             f"• Giảm trừ người phụ thuộc: {DEPENDENT_DEDUCTION / 1e6:.1f} triệu/người/tháng\n"
-            "• Thuế suất: 5% - 35% (biểu lũy tiến 5 bậc)\n"
+            f"• Thuế suất: {min_rate}% - {max_rate}% (biểu lũy tiến {n_brackets} bậc)\n"
             "• Kê khai: Hàng tháng hoặc hàng quý\n"
             "• Quyết toán: Hàng năm (trước 31/3 năm sau)"
         )
