@@ -78,6 +78,13 @@ async def main() -> None:
     # Start gRPC server
     grpc_server = await serve_grpc()
 
+    # Start tax regulation update scheduler (background task)
+    try:
+        from data.scheduler import tax_scheduler
+        tax_scheduler.start()
+    except Exception:
+        logger.warning("Tax update scheduler failed to start", exc_info=True)
+
     # Setup shutdown
     shutdown_event = asyncio.Event()
 
@@ -105,6 +112,14 @@ async def main() -> None:
     async def wait_shutdown():
         await shutdown_event.wait()
         logger.info("Shutting down servers...")
+
+        # Stop tax scheduler
+        try:
+            from data.scheduler import tax_scheduler
+            await tax_scheduler.stop()
+        except Exception:
+            pass
+
         await grpc_server.stop(grace=5)
         rest_server.should_exit = True
 

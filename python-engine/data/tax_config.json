@@ -36,10 +36,10 @@
       {"capital_threshold": 0, "amount": 2000000}
     ],
     "household_tiers": [
-      {"revenue_threshold": 0, "amount": 0},
-      {"revenue_threshold": 100000000, "amount": 300000},
+      {"revenue_threshold": 500000000, "amount": 1000000},
       {"revenue_threshold": 300000000, "amount": 500000},
-      {"revenue_threshold": 500000000, "amount": 1000000}
+      {"revenue_threshold": 100000000, "amount": 300000},
+      {"revenue_threshold": 0, "amount": 0}
     ]
   }
 }

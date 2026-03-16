@@ -9,15 +9,20 @@ Key references:
 
 from .base import CustomerType, TaxCategory, TaxContext, TaxResult, TaxRule
 
+# --- Load VAT parameters from config (with hardcoded fallbacks) ---
+try:
+    from data.tax_config_loader import tax_config as _cfg
+    VAT_RATE_STANDARD: float = _cfg.vat_rate_standard
+    VAT_RATE_REDUCED: float = _cfg.vat_rate_reduced
+    VAT_RATE_SPECIAL_REDUCED: float = _cfg.vat_rate_special_reduced
+    VAT_REGISTRATION_THRESHOLD: int = _cfg.vat_registration_threshold
+except Exception:
+    VAT_RATE_STANDARD = 0.10
+    VAT_RATE_REDUCED = 0.05
+    VAT_RATE_SPECIAL_REDUCED = 0.08
+    VAT_REGISTRATION_THRESHOLD = 100_000_000
 
-# VAT rates in Vietnam
-VAT_RATE_STANDARD = 0.10  # 10% - Thuế suất phổ thông
-VAT_RATE_REDUCED = 0.05  # 5% - Thuế suất ưu đãi
-VAT_RATE_ZERO = 0.0  # 0% - Hàng xuất khẩu
-VAT_RATE_SPECIAL_REDUCED = 0.08  # 8% - Giảm thuế theo NQ 43/2022
-
-# Revenue threshold for VAT registration (100 triệu VND/năm)
-VAT_REGISTRATION_THRESHOLD = 100_000_000
+VAT_RATE_ZERO = 0.0  # 0% - Hàng xuất khẩu (always zero)
 
 
 class VATRule(TaxRule):
