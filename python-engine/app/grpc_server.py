@@ -62,6 +62,64 @@ _CUSTOMER_TYPE_MAP = {
 }
 
 
+def _auto_seed_chromadb(embedding_service) -> int:
+    """Auto-seed ChromaDB from seed JSON files if empty.
+
+    Uses EmbeddingService directly (no LLM needed) to chunk and index
+    tax regulation documents.  Returns number of documents indexed.
+    """
+    import json
+
+    seed_dir = Path(__file__).resolve().parent.parent / "data" / "seed"
+    seed_files = [
+        "vat_regulations.json",
+        "cit_regulations.json",
+        "pit_regulations.json",
+        "license_tax_regulations.json",
+        "procedure_regulations.json",
+    ]
+
+    indexed = 0
+    for filename in seed_files:
+        filepath = seed_dir / filename
+        if not filepath.exists():
+            continue
+
+        with open(filepath, encoding="utf-8") as f:
+            docs = json.load(f)
+
+        for doc in docs:
+            content = doc.get("content", "")
+            if not content:
+                continue
+
+            metadata = {
+                "document_number": doc.get("document_number", ""),
+                "title": doc.get("title", ""),
+                "category": doc.get("category", ""),
+                "effective_date": doc.get("effective_date", ""),
+                "source_url": doc.get("source_url", ""),
+            }
+
+            # Chunk text for better retrieval
+            words = content.split()
+            chunks = []
+            start = 0
+            while start < len(words):
+                end = start + 500
+                chunks.append(" ".join(words[start:end]))
+                start = end - 50
+
+            doc_id = doc.get("document_number", f"doc_{indexed}")
+            chunk_ids = [f"{doc_id}_chunk_{i}" for i in range(len(chunks))]
+            metadatas = [metadata] * len(chunks)
+
+            embedding_service.add_documents_batch(chunk_ids, chunks, metadatas)
+            indexed += 1
+
+    return indexed
+
+
 def _init_rag_service():
     """Initialize RAG service (optional, graceful fallback if unavailable)."""
     try:
@@ -72,11 +130,18 @@ def _init_rag_service():
         embedding = EmbeddingService()
         doc_count = embedding.get_document_count()
         logger.info("ChromaDB initialized: %d documents in vector store", doc_count)
+
         if doc_count == 0:
-            logger.warning(
-                "ChromaDB is EMPTY. Run seed_loader to index tax regulations: "
-                "docker compose exec tax-engine python -m data.seed_loader"
-            )
+            logger.info("ChromaDB is EMPTY — auto-seeding from seed files...")
+            try:
+                indexed = _auto_seed_chromadb(embedding)
+                doc_count = embedding.get_document_count()
+                logger.info(
+                    "Auto-seed complete: %d documents indexed (%d chunks total)",
+                    indexed, doc_count,
+                )
+            except Exception as e:
+                logger.warning("Auto-seed failed: %s: %s", type(e).__name__, e)
 
         llm = LLMClient()
         rag = RAGService(embedding, llm)
@@ -86,7 +151,7 @@ def _init_rag_service():
         logger.warning(
             "RAG service unavailable - running WITHOUT LLM/vector search. "
             "Reason: %s: %s. "
-            "Ensure ANTHROPIC_API_KEY is set in environment.",
+            "Ensure OPENAI_API_KEY or ANTHROPIC_API_KEY is set in environment.",
             type(e).__name__,
             e,
         )
