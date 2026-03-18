@@ -93,11 +93,33 @@ def _init_rag_service():
         return None
 
 
-async def _ensure_tables():
-    """Create new tables if they don't exist (idempotent)."""
-    async with db_engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    logger.info("Database tables ensured")
+async def _ensure_tables(max_retries: int = 3, base_delay: float = 2.0):
+    """Create new tables if they don't exist (idempotent).
+
+    Retries with exponential backoff on transient database errors.
+    """
+    import asyncio
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            async with db_engine.begin() as conn:
+                await conn.run_sync(Base.metadata.create_all)
+            logger.info("Database tables ensured")
+            return
+        except Exception as e:
+            if attempt < max_retries:
+                delay = base_delay * (2 ** (attempt - 1))
+                logger.warning(
+                    "Database connection failed (attempt %d/%d): %s: %s — retrying in %.1fs",
+                    attempt, max_retries, type(e).__name__, e, delay,
+                )
+                await asyncio.sleep(delay)
+            else:
+                logger.error(
+                    "Database connection failed after %d attempts: %s: %s",
+                    max_retries, type(e).__name__, e,
+                )
+                raise
 
 
 class TaxEngineServicer(pb2_grpc.TaxEngineServicer):
@@ -521,9 +543,21 @@ class TaxEngineServicer(pb2_grpc.TaxEngineServicer):
 
 
 async def serve_grpc() -> grpc.aio.Server:
-    """Start the gRPC server."""
-    # Ensure database tables exist
-    await _ensure_tables()
+    """Start the gRPC server.
+
+    Handles database initialization failures gracefully — if the database
+    is unreachable the server still starts (DB-dependent RPCs will fail
+    individually rather than preventing all message processing).
+    """
+    # Ensure database tables exist (retry with backoff)
+    try:
+        await _ensure_tables()
+    except Exception:
+        logger.error(
+            "Could not connect to database — starting gRPC server WITHOUT "
+            "database support. Customer profiles and support cases will be "
+            "unavailable until the database is reachable."
+        )
 
     server = grpc.aio.server(futures.ThreadPoolExecutor(max_workers=10))
     pb2_grpc.add_TaxEngineServicer_to_server(TaxEngineServicer(), server)
