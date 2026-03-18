@@ -8,6 +8,7 @@ import {
   IncomingMessage,
   MessageHandler,
   OutgoingMessage,
+  StreamHandle,
 } from '../types';
 import { mapTelegramMessage } from './mapper';
 
@@ -258,6 +259,103 @@ export class TelegramAdapter implements ChannelAdapter {
           });
         }
       }
+    }
+  }
+
+  /**
+   * Send an initial placeholder message and return a handle for progressive
+   * updates via Telegram's editMessageText API.
+   *
+   * The handle batches rapid token updates to avoid hitting Telegram's rate
+   * limit (~30 edits/second per chat).
+   */
+  async sendStreamStart(chatId: string): Promise<StreamHandle | undefined> {
+    const telegramChatId = Number(chatId);
+
+    try {
+      // Send a typing indicator placeholder
+      const sent = await this.bot.telegram.sendMessage(telegramChatId, '💭 Đang xử lý...');
+      const messageId = sent.message_id;
+
+      let accumulated = '';
+      let pendingUpdate: ReturnType<typeof setTimeout> | null = null;
+      // Throttle edits: at most once every 800ms to stay well within
+      // Telegram rate limits and avoid visual flickering.
+      const THROTTLE_MS = 800;
+
+      const flushUpdate = async () => {
+        pendingUpdate = null;
+        if (!accumulated) return;
+        try {
+          await this.bot.telegram.editMessageText(
+            telegramChatId,
+            messageId,
+            undefined,
+            accumulated + ' ▍',  // blinking cursor effect
+          );
+        } catch (editErr: any) {
+          // "message is not modified" is harmless (same content)
+          if (!editErr?.message?.includes('message is not modified')) {
+            logger.warn('Stream edit failed', { chatId, error: editErr?.message });
+          }
+        }
+      };
+
+      const bot = this.bot;
+      const adapter = this;
+
+      return {
+        update: async (text: string) => {
+          accumulated += text;
+          // Schedule a throttled edit
+          if (!pendingUpdate) {
+            pendingUpdate = setTimeout(flushUpdate, THROTTLE_MS);
+          }
+        },
+
+        finalize: async (message: OutgoingMessage) => {
+          // Cancel any pending throttled update
+          if (pendingUpdate) {
+            clearTimeout(pendingUpdate);
+            pendingUpdate = null;
+          }
+
+          // Build final text with references
+          const finalText = message.text || accumulated;
+
+          // Build inline keyboard
+          const keyboard = message.quickReplies?.map((qr) => [{
+            text: qr.label,
+            callback_data: qr.payload,
+          }]);
+
+          const replyMarkup = keyboard
+            ? { reply_markup: { inline_keyboard: keyboard } }
+            : {};
+
+          try {
+            await bot.telegram.editMessageText(
+              telegramChatId,
+              messageId,
+              undefined,
+              finalText,
+              replyMarkup,
+            );
+          } catch (editErr: any) {
+            if (!editErr?.message?.includes('message is not modified')) {
+              // Fallback: send as a new message if edit fails
+              logger.warn('Stream finalize edit failed, sending new message', {
+                chatId,
+                error: editErr?.message,
+              });
+              await adapter.sendMessage(chatId, message);
+            }
+          }
+        },
+      };
+    } catch (err) {
+      logger.warn('sendStreamStart failed, streaming unavailable', { chatId, error: err });
+      return undefined;
     }
   }
 

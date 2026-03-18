@@ -302,26 +302,119 @@ class LLMClient:
         system_prompt: str | None = None,
     ) -> str:
         """Generate a response with RAG context documents."""
-        context_text = "\n\n---\n\n".join(context_documents) if context_documents else "Không có tài liệu tham khảo."
-
-        if prompt_template:
-            user_prompt = prompt_template.format(
-                customer_type=customer_type,
-                query=query,
-                context_documents=context_text,
-            )
-        else:
-            from app.ai.prompts import TAX_CONSULTATION_PROMPT
-            user_prompt = TAX_CONSULTATION_PROMPT.format(
-                customer_type=customer_type,
-                query=query,
-                context_documents=context_text,
-            )
-
+        user_prompt = self._build_context_prompt(query, context_documents, customer_type, prompt_template)
         kwargs: dict = {"conversation_history": conversation_history}
         if system_prompt:
             kwargs["system_prompt"] = system_prompt
         return await self.generate(user_prompt, **kwargs)
+
+    async def generate_stream(
+        self,
+        user_prompt: str,
+        system_prompt: str = SYSTEM_PROMPT,
+        max_tokens: int = 2048,
+        conversation_history: list[dict] | None = None,
+    ):
+        """Stream tokens from the LLM. Yields str chunks as they arrive."""
+        messages = self._build_messages(conversation_history, user_prompt)
+        logger.debug("LLM stream: provider=%s, model=%s", self.provider, self.model)
+
+        if self.provider == "anthropic":
+            async for chunk in self._stream_anthropic(messages, system_prompt, max_tokens):
+                yield chunk
+        else:
+            async for chunk in self._stream_openai(messages, system_prompt, max_tokens):
+                yield chunk
+
+    async def generate_stream_with_context(
+        self,
+        query: str,
+        context_documents: list[str],
+        customer_type: str = "",
+        prompt_template: str = "",
+        conversation_history: list[dict] | None = None,
+        system_prompt: str | None = None,
+    ):
+        """Stream a response with RAG context documents. Yields str chunks."""
+        user_prompt = self._build_context_prompt(query, context_documents, customer_type, prompt_template)
+        kwargs: dict = {"conversation_history": conversation_history}
+        if system_prompt:
+            kwargs["system_prompt"] = system_prompt
+        async for chunk in self.generate_stream(user_prompt, **kwargs):
+            yield chunk
+
+    async def _stream_anthropic(self, messages, system_prompt, max_tokens):
+        """Stream from Anthropic Claude API."""
+        from anthropic import APIStatusError, AuthenticationError
+
+        try:
+            async with self._anthropic.messages.stream(
+                model=self.model,
+                system=system_prompt,
+                messages=messages,
+                temperature=self.temperature,
+                max_tokens=max_tokens,
+            ) as stream:
+                async for text in stream.text_stream:
+                    yield text
+        except AuthenticationError as e:
+            raise LLMAuthError(f"Authentication failed: {e.message}") from e
+        except APIStatusError as e:
+            if e.status_code == 402 or (
+                e.status_code == 400
+                and any(kw in e.message.lower() for kw in ("credit", "balance", "billing", "payment", "insufficient"))
+            ):
+                raise LLMCreditError(f"Credit/billing issue: {e.message}") from e
+            raise LLMError(f"API error {e.status_code}: {e.message}", error_type="api_error") from e
+        except httpx.TimeoutException as e:
+            raise LLMError("Stream timed out", error_type="timeout", retryable=True) from e
+
+    async def _stream_openai(self, messages, system_prompt, max_tokens):
+        """Stream from OpenAI-compatible API."""
+        from openai import APIStatusError, AuthenticationError
+
+        openai_messages = [{"role": "system", "content": system_prompt}] + messages
+
+        try:
+            stream = await self._openai.chat.completions.create(
+                model=self.model,
+                messages=openai_messages,
+                temperature=self.temperature,
+                max_tokens=max_tokens,
+                stream=True,
+            )
+            async for chunk in stream:
+                delta = chunk.choices[0].delta if chunk.choices else None
+                if delta and delta.content:
+                    yield delta.content
+        except AuthenticationError as e:
+            raise LLMAuthError(f"Authentication failed: {e.message}") from e
+        except APIStatusError as e:
+            if e.status_code == 402 or (
+                e.status_code == 400
+                and any(kw in e.message.lower() for kw in ("credit", "balance", "billing", "payment", "insufficient", "quota"))
+            ):
+                raise LLMCreditError(f"Credit/billing issue: {e.message}") from e
+            raise LLMError(f"API error {e.status_code}: {e.message}", error_type="api_error") from e
+        except httpx.TimeoutException as e:
+            raise LLMError("Stream timed out", error_type="timeout", retryable=True) from e
+
+    @staticmethod
+    def _build_context_prompt(query, context_documents, customer_type, prompt_template):
+        """Build a user prompt with RAG context documents."""
+        context_text = "\n\n---\n\n".join(context_documents) if context_documents else "Không có tài liệu tham khảo."
+        if prompt_template:
+            return prompt_template.format(
+                customer_type=customer_type,
+                query=query,
+                context_documents=context_text,
+            )
+        from app.ai.prompts import TAX_CONSULTATION_PROMPT
+        return TAX_CONSULTATION_PROMPT.format(
+            customer_type=customer_type,
+            query=query,
+            context_documents=context_text,
+        )
 
     @staticmethod
     def _build_messages(

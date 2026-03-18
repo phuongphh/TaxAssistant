@@ -455,24 +455,174 @@ class TaxEngineServicer(pb2_grpc.TaxEngineServicer):
         }
 
     async def ProcessMessageStream(self, request, context):
-        """Stream response for long-running operations."""
-        # Process message normally first
-        result = await self.engine.process_message(
-            message=request.message,
-            customer_type=_CUSTOMER_TYPE_MAP.get(request.context.customer_type, "unknown"),
+        """Stream LLM response tokens progressively via server-streaming RPC.
+
+        For intents that go through RAG/LLM, tokens are streamed as they
+        are generated.  For hardcoded responses (greeting, calculation,
+        deadline), the full reply is sent in one chunk.
+        """
+        import time
+
+        start = time.monotonic()
+        request_id = request.request_id
+        customer_type = _CUSTOMER_TYPE_MAP.get(request.context.customer_type, "unknown")
+        logger.info("gRPC ProcessMessageStream: request_id=%s msg='%s'", request_id, request.message[:100])
+
+        conversation_history = [
+            {"role": entry.role, "content": entry.content}
+            for entry in request.conversation_history
+        ]
+
+        customer_profile = None
+        if request.HasField("customer_profile") and request.customer_profile.customer_id:
+            customer_profile = {
+                "customer_id": request.customer_profile.customer_id,
+                "customer_type": request.customer_profile.customer_type,
+                "business_name": request.customer_profile.business_name,
+                "tax_code": request.customer_profile.tax_code,
+                "industry": request.customer_profile.industry,
+                "province": request.customer_profile.province,
+                "annual_revenue_range": request.customer_profile.annual_revenue_range,
+                "onboarding_step": request.customer_profile.onboarding_step,
+                "tax_profile": dict(request.customer_profile.tax_profile),
+                "notes": [{"note": n} for n in request.customer_profile.recent_notes],
+            }
+            if customer_profile["customer_type"] and customer_profile["customer_type"] != "unknown":
+                customer_type = customer_profile["customer_type"]
+
+        active_cases = [
+            {"case_id": c.case_id, "service_type": c.service_type,
+             "title": c.title, "status": c.status, "current_step": c.current_step}
+            for c in request.active_cases
+        ]
+        summaries = list(request.conversation_summaries)
+
+        memory_context = build_memory_context(
+            customer=customer_profile,
+            active_cases=active_cases,
+            recent_summaries=summaries,
         )
 
-        reply = result.get("reply", "")
-        # Stream in chunks
-        chunk_size = 100
-        for i in range(0, len(reply), chunk_size):
-            chunk = reply[i:i + chunk_size]
-            is_final = (i + chunk_size) >= len(reply)
-            yield pb2.TaxStreamChunk(
-                request_id=request.request_id,
-                chunk=chunk,
-                is_final=is_final,
-            )
+        # Classify intent to decide if we can stream from LLM
+        from app.core.intent_classifier import Intent
+        classification = self.engine.classifier.classify(request.message)
+
+        # Intents that go through LLM/RAG and benefit from streaming
+        streamable_intents = {
+            Intent.TAX_INFO, Intent.TAX_PROCEDURE, Intent.DECLARATION,
+            Intent.REGISTRATION, Intent.PENALTY, Intent.UNKNOWN,
+        }
+
+        can_stream = (
+            self.rag_service is not None
+            and classification.intent in streamable_intents
+        )
+
+        if can_stream:
+            # Stream from RAG + LLM
+            try:
+                async for chunk_text, is_final, actions, references in self._stream_rag_response(
+                    request.message, customer_type, classification,
+                    conversation_history, memory_context,
+                ):
+                    proto_actions = [
+                        pb2.SuggestedAction(label=a.get("label", ""), action_type=a.get("action_type", ""), payload=a.get("payload", ""))
+                        for a in actions
+                    ] if actions else []
+                    proto_refs = [
+                        pb2.TaxReference(title=r.get("title", ""), url=r.get("url", ""), snippet=r.get("snippet", ""))
+                        for r in references
+                    ] if references else []
+
+                    yield pb2.TaxStreamChunk(
+                        request_id=request_id,
+                        chunk=chunk_text,
+                        is_final=is_final,
+                        actions=proto_actions,
+                        references=proto_refs,
+                    )
+
+                elapsed = time.monotonic() - start
+                logger.info("ProcessMessageStream OK (streamed): request_id=%s elapsed=%.2fs", request_id, elapsed)
+                return
+            except Exception as e:
+                logger.warning("Streaming failed, falling back to unary: %s", e)
+
+        # Fallback: process normally and send full reply as one chunk
+        result = await self.engine.process_message(
+            message=request.message,
+            customer_type=customer_type,
+            conversation_history=conversation_history,
+            memory_context=memory_context,
+        )
+
+        actions = [
+            pb2.SuggestedAction(label=a.get("label", ""), action_type=a.get("action_type", ""), payload=a.get("payload", ""))
+            for a in result.get("actions", [])
+        ]
+        references = [
+            pb2.TaxReference(title=r.get("title", ""), url=r.get("url", ""), snippet=r.get("snippet", ""))
+            for r in result.get("references", [])
+        ]
+
+        yield pb2.TaxStreamChunk(
+            request_id=request_id,
+            chunk=result.get("reply", ""),
+            is_final=True,
+            actions=actions,
+            references=references,
+        )
+
+        elapsed = time.monotonic() - start
+        logger.info("ProcessMessageStream OK (unary fallback): request_id=%s elapsed=%.2fs", request_id, elapsed)
+
+    async def _stream_rag_response(self, message, customer_type, classification, history, memory_context):
+        """Stream LLM response through RAG pipeline.
+
+        Yields tuples of (chunk_text, is_final, actions, references).
+        Actions and references are only sent with the final chunk.
+        """
+        from app.core.intent_classifier import Intent
+        from app.core.tax_rules.base import CustomerType
+
+        ct = CustomerType(customer_type) if customer_type in CustomerType.__members__.values() else CustomerType.UNKNOWN
+        category_filter = classification.tax_category.value if classification.tax_category else None
+
+        # 1. Retrieve documents from ChromaDB
+        results = self.rag_service.embeddings.search(
+            query=message, n_results=5, category_filter=category_filter,
+        )
+
+        context_docs = [doc["content"] for doc in results]
+        sources = [
+            {"title": doc["metadata"].get("document_number", ""), "snippet": doc["content"][:200], "url": doc["metadata"].get("source_url", "")}
+            for doc in results
+        ]
+
+        # Build system prompt with memory
+        system_prompt = None
+        if memory_context:
+            from app.ai.prompts import SYSTEM_PROMPT
+            system_prompt = SYSTEM_PROMPT + "\n\n" + memory_context
+
+        # 2. Stream from LLM
+        stream_kwargs = {
+            "query": message,
+            "context_documents": context_docs,
+            "customer_type": customer_type,
+            "conversation_history": history,
+        }
+        if system_prompt:
+            stream_kwargs["system_prompt"] = system_prompt
+
+        accumulated = ""
+        async for token in self.rag_service.llm.generate_stream_with_context(**stream_kwargs):
+            accumulated += token
+            yield (token, False, [], [])
+
+        # Final chunk with references
+        references = [{"title": s["title"], "url": s.get("url", ""), "snippet": s.get("snippet", "")} for s in sources]
+        yield ("", True, [], references)
 
     async def LookupRegulation(self, request, context):
         """Lookup tax regulation using RAG vector search."""
