@@ -504,14 +504,19 @@ class TaxEngineServicer(pb2_grpc.TaxEngineServicer):
             recent_summaries=summaries,
         )
 
-        # Use the SAME engine.process_message() as the unary RPC
-        # to preserve all routing logic, intent handling, and response quality.
-        result = await self.engine.process_message(
-            message=request.message,
-            customer_type=customer_type,
-            conversation_history=conversation_history,
-            memory_context=memory_context,
-        )
+        # Mirror the onboarding check from ProcessMessage so streaming
+        # and unary RPCs behave identically.
+        if customer_profile and customer_profile.get("onboarding_step") in ("new", "collecting_type", "collecting_info"):
+            result = await self._handle_onboarding(
+                request, customer_profile, customer_type,
+            )
+        else:
+            result = await self.engine.process_message(
+                message=request.message,
+                customer_type=customer_type,
+                conversation_history=conversation_history,
+                memory_context=memory_context,
+            )
 
         reply = result.get("reply", "")
         actions = [
