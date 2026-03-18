@@ -455,11 +455,12 @@ class TaxEngineServicer(pb2_grpc.TaxEngineServicer):
         }
 
     async def ProcessMessageStream(self, request, context):
-        """Stream LLM response tokens progressively via server-streaming RPC.
+        """Stream response progressively via server-streaming RPC.
 
-        For intents that go through RAG/LLM, tokens are streamed as they
-        are generated.  For hardcoded responses (greeting, calculation,
-        deadline), the full reply is sent in one chunk.
+        Uses the same engine.process_message() as the unary RPC to
+        guarantee identical response quality.  The full reply is then
+        streamed back in sentence-level chunks so the client can show
+        progressive updates to the user.
         """
         import time
 
@@ -503,52 +504,8 @@ class TaxEngineServicer(pb2_grpc.TaxEngineServicer):
             recent_summaries=summaries,
         )
 
-        # Classify intent to decide if we can stream from LLM
-        from app.core.intent_classifier import Intent
-        classification = self.engine.classifier.classify(request.message)
-
-        # Intents that go through LLM/RAG and benefit from streaming
-        streamable_intents = {
-            Intent.TAX_INFO, Intent.TAX_PROCEDURE, Intent.DECLARATION,
-            Intent.REGISTRATION, Intent.PENALTY, Intent.UNKNOWN,
-        }
-
-        can_stream = (
-            self.rag_service is not None
-            and classification.intent in streamable_intents
-        )
-
-        if can_stream:
-            # Stream from RAG + LLM
-            try:
-                async for chunk_text, is_final, actions, references in self._stream_rag_response(
-                    request.message, customer_type, classification,
-                    conversation_history, memory_context,
-                ):
-                    proto_actions = [
-                        pb2.SuggestedAction(label=a.get("label", ""), action_type=a.get("action_type", ""), payload=a.get("payload", ""))
-                        for a in actions
-                    ] if actions else []
-                    proto_refs = [
-                        pb2.TaxReference(title=r.get("title", ""), url=r.get("url", ""), snippet=r.get("snippet", ""))
-                        for r in references
-                    ] if references else []
-
-                    yield pb2.TaxStreamChunk(
-                        request_id=request_id,
-                        chunk=chunk_text,
-                        is_final=is_final,
-                        actions=proto_actions,
-                        references=proto_refs,
-                    )
-
-                elapsed = time.monotonic() - start
-                logger.info("ProcessMessageStream OK (streamed): request_id=%s elapsed=%.2fs", request_id, elapsed)
-                return
-            except Exception as e:
-                logger.warning("Streaming failed, falling back to unary: %s", e)
-
-        # Fallback: process normally and send full reply as one chunk
+        # Use the SAME engine.process_message() as the unary RPC
+        # to preserve all routing logic, intent handling, and response quality.
         result = await self.engine.process_message(
             message=request.message,
             customer_type=customer_type,
@@ -556,6 +513,7 @@ class TaxEngineServicer(pb2_grpc.TaxEngineServicer):
             memory_context=memory_context,
         )
 
+        reply = result.get("reply", "")
         actions = [
             pb2.SuggestedAction(label=a.get("label", ""), action_type=a.get("action_type", ""), payload=a.get("payload", ""))
             for a in result.get("actions", [])
@@ -565,64 +523,55 @@ class TaxEngineServicer(pb2_grpc.TaxEngineServicer):
             for r in result.get("references", [])
         ]
 
-        yield pb2.TaxStreamChunk(
-            request_id=request_id,
-            chunk=result.get("reply", ""),
-            is_final=True,
-            actions=actions,
-            references=references,
-        )
+        # Stream the reply in sentence-level chunks for progressive display.
+        # This gives a "typing" effect on the client while keeping the full
+        # engine logic intact.
+        chunks = self._split_into_stream_chunks(reply)
+
+        for i, chunk in enumerate(chunks):
+            is_final = (i == len(chunks) - 1)
+            yield pb2.TaxStreamChunk(
+                request_id=request_id,
+                chunk=chunk,
+                is_final=is_final,
+                actions=actions if is_final else [],
+                references=references if is_final else [],
+            )
 
         elapsed = time.monotonic() - start
-        logger.info("ProcessMessageStream OK (unary fallback): request_id=%s elapsed=%.2fs", request_id, elapsed)
+        logger.info("ProcessMessageStream OK: request_id=%s chunks=%d elapsed=%.2fs", request_id, len(chunks), elapsed)
 
-    async def _stream_rag_response(self, message, customer_type, classification, history, memory_context):
-        """Stream LLM response through RAG pipeline.
+    @staticmethod
+    def _split_into_stream_chunks(text: str) -> list[str]:
+        """Split reply text into sentence/paragraph-level chunks for streaming.
 
-        Yields tuples of (chunk_text, is_final, actions, references).
-        Actions and references are only sent with the final chunk.
+        Splits at paragraph breaks (\\n\\n), then at line breaks (\\n) for
+        long paragraphs.  Returns at least one chunk even if text is empty.
         """
-        from app.core.intent_classifier import Intent
-        from app.core.tax_rules.base import CustomerType
+        if not text:
+            return [text]
 
-        ct = CustomerType(customer_type) if customer_type in CustomerType.__members__.values() else CustomerType.UNKNOWN
-        category_filter = classification.tax_category.value if classification.tax_category else None
+        chunks: list[str] = []
+        # Split by paragraph first
+        paragraphs = text.split("\n\n")
 
-        # 1. Retrieve documents from ChromaDB
-        results = self.rag_service.embeddings.search(
-            query=message, n_results=5, category_filter=category_filter,
-        )
+        for para in paragraphs:
+            if chunks:
+                # Re-add the paragraph separator
+                chunks.append("\n\n")
 
-        context_docs = [doc["content"] for doc in results]
-        sources = [
-            {"title": doc["metadata"].get("document_number", ""), "snippet": doc["content"][:200], "url": doc["metadata"].get("source_url", "")}
-            for doc in results
-        ]
+            # If paragraph is short enough, send as one chunk
+            if len(para) <= 200:
+                chunks.append(para)
+            else:
+                # Split long paragraphs by line
+                lines = para.split("\n")
+                for j, line in enumerate(lines):
+                    if j > 0:
+                        chunks.append("\n")
+                    chunks.append(line)
 
-        # Build system prompt with memory
-        system_prompt = None
-        if memory_context:
-            from app.ai.prompts import SYSTEM_PROMPT
-            system_prompt = SYSTEM_PROMPT + "\n\n" + memory_context
-
-        # 2. Stream from LLM
-        stream_kwargs = {
-            "query": message,
-            "context_documents": context_docs,
-            "customer_type": customer_type,
-            "conversation_history": history,
-        }
-        if system_prompt:
-            stream_kwargs["system_prompt"] = system_prompt
-
-        accumulated = ""
-        async for token in self.rag_service.llm.generate_stream_with_context(**stream_kwargs):
-            accumulated += token
-            yield (token, False, [], [])
-
-        # Final chunk with references
-        references = [{"title": s["title"], "url": s.get("url", ""), "snippet": s.get("snippet", "")} for s in sources]
-        yield ("", True, [], references)
+        return chunks if chunks else [text]
 
     async def LookupRegulation(self, request, context):
         """Lookup tax regulation using RAG vector search."""
