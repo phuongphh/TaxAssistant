@@ -47,6 +47,14 @@ export interface TaxEngineResponse {
   category: string;
 }
 
+export interface StreamChunk {
+  requestId: string;
+  chunk: string;
+  isFinal: boolean;
+  actions: TaxEngineResponse['actions'];
+  references: TaxEngineResponse['references'];
+}
+
 /**
  * gRPC client for communicating with the Python Tax Engine service
  */
@@ -185,6 +193,127 @@ export class TaxEngineClient {
           });
           resolve(response as TaxEngineResponse);
         }
+      });
+    });
+  }
+
+  /**
+   * Stream a tax-related message for progressive response.
+   * Calls onChunk for each token/chunk as it arrives from the LLM.
+   * Returns the fully assembled TaxEngineResponse when done.
+   */
+  processMessageStream(
+    requestId: string,
+    message: string,
+    session: SessionData,
+    onChunk: (chunk: StreamChunk) => void,
+    customerProfile?: CustomerProfile,
+    activeCases?: ActiveCase[],
+    conversationSummaries?: string[],
+  ): Promise<TaxEngineResponse> {
+    const recentHistory = (session.conversationHistory || []).slice(-10).map((entry) => ({
+      role: entry.role,
+      content: entry.content,
+      timestamp: entry.timestamp,
+    }));
+
+    const request: Record<string, unknown> = {
+      requestId,
+      message,
+      language: 'vi',
+      context: {
+        sessionId: session.sessionId,
+        userId: session.userId,
+        customerType: mapCustomerType(session.customerType),
+        previousTopics: [],
+        metadata: session.context as Record<string, string>,
+      },
+      conversationHistory: recentHistory,
+    };
+
+    if (customerProfile) {
+      request.customerProfile = {
+        customerId: customerProfile.customerId,
+        channel: customerProfile.channel,
+        channelUserId: customerProfile.channelUserId,
+        username: customerProfile.username || '',
+        firstName: customerProfile.firstName || '',
+        lastName: customerProfile.lastName || '',
+        displayName: customerProfile.displayName || '',
+        customerType: customerProfile.customerType,
+        businessName: customerProfile.businessName,
+        taxCode: customerProfile.taxCode,
+        industry: customerProfile.industry,
+        province: customerProfile.province,
+        annualRevenueRange: customerProfile.annualRevenueRange,
+        employeeCountRange: customerProfile.employeeCountRange,
+        onboardingStep: customerProfile.onboardingStep,
+        taxProfile: customerProfile.taxProfile || {},
+        recentNotes: customerProfile.recentNotes || [],
+      };
+    }
+
+    if (activeCases?.length) {
+      request.activeCases = activeCases.map((c) => ({
+        caseId: c.caseId,
+        customerId: c.customerId,
+        serviceType: c.serviceType,
+        title: c.title,
+        status: c.status,
+        currentStep: c.currentStep,
+      }));
+    }
+
+    if (conversationSummaries?.length) {
+      request.conversationSummaries = conversationSummaries;
+    }
+
+    const startMs = Date.now();
+    return new Promise((resolve, reject) => {
+      const call = this.client.processMessageStream(request, { deadline: this.deadline(180000) });
+
+      let fullReply = '';
+      let lastActions: TaxEngineResponse['actions'] = [];
+      let lastReferences: TaxEngineResponse['references'] = [];
+
+      call.on('data', (data: any) => {
+        const chunk: StreamChunk = {
+          requestId: data.requestId || requestId,
+          chunk: data.chunk || '',
+          isFinal: data.isFinal || false,
+          actions: data.actions || [],
+          references: data.references || [],
+        };
+
+        fullReply += chunk.chunk;
+        if (chunk.actions.length) lastActions = chunk.actions;
+        if (chunk.references.length) lastReferences = chunk.references;
+
+        onChunk(chunk);
+      });
+
+      call.on('error', (err: any) => {
+        const elapsedMs = Date.now() - startMs;
+        logger.error('gRPC ProcessMessageStream error', {
+          code: err.code,
+          message: err.message,
+          elapsedMs,
+          requestId,
+        });
+        reject(new TaxEngineError(`Tax Engine stream error: ${err.message}`));
+      });
+
+      call.on('end', () => {
+        const elapsedMs = Date.now() - startMs;
+        logger.debug('gRPC ProcessMessageStream OK', { requestId, elapsedMs, replyLength: fullReply.length });
+        resolve({
+          requestId,
+          reply: fullReply,
+          actions: lastActions,
+          references: lastReferences,
+          confidence: 0.8,
+          category: '',
+        });
       });
     });
   }

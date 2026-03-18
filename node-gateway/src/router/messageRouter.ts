@@ -3,7 +3,7 @@ import { logger } from '../utils/logger';
 import { IncomingMessage, OutgoingMessage, ChannelAdapter } from '../channels/types';
 import { SessionManager } from '../session/manager';
 import { SessionData, CustomerProfile, ActiveCase } from '../session/store';
-import { TaxEngineClient } from '../grpc/client';
+import { TaxEngineClient, StreamChunk } from '../grpc/client';
 import { TaxEngineError, SessionError } from '../utils/errors';
 
 /**
@@ -110,36 +110,74 @@ export class MessageRouter {
         await this.sessionManager.recordUserMessage(session.sessionId, message.text);
       }
 
-      // 5. Route to Tax Engine with full context
-      // NOTE: We use the original 'session' (not re-read from Redis) because
-      // its conversationHistory contains turns BEFORE the current message,
-      // while the current message is passed separately as request.message.
-      // The session's customerType/customerId are already correct (set in step 2).
-      const engineResponse = await this.taxEngine.processMessage(
-        requestId,
-        message.text || `[${message.type}]`,
-        session,
-        customerProfile,
-        activeCases,
-      );
+      // 5. Route to Tax Engine — try streaming first for progressive UX
+      const adapter = this.channelAdapters.get(message.channel);
+      const streamHandle = adapter?.sendStreamStart
+        ? await adapter.sendStreamStart(message.chatId)
+        : undefined;
 
-      // 6. Build and send reply
-      const reply: OutgoingMessage = {
-        text: engineResponse.reply,
-        quickReplies: engineResponse.actions
-          ?.filter((a) => a.actionType === 'quick_reply')
-          .map((a) => ({ label: a.label, payload: a.payload })),
-      };
+      let engineResponse;
 
-      // Add references as footer if available
-      if (engineResponse.references?.length > 0) {
-        const refs = engineResponse.references
-          .map((r, i) => `[${i + 1}] ${r.title}`)
-          .join('\n');
-        reply.text += `\n\n📎 Tham khảo:\n${refs}`;
+      if (streamHandle) {
+        // Streaming path: tokens are pushed to the channel as they arrive
+        try {
+          engineResponse = await this.taxEngine.processMessageStream(
+            requestId,
+            message.text || `[${message.type}]`,
+            session,
+            (chunk: StreamChunk) => {
+              if (chunk.chunk) {
+                streamHandle.update(chunk.chunk);
+              }
+            },
+            customerProfile,
+            activeCases,
+          );
+
+          // Finalize: replace placeholder with complete message + buttons
+          const finalReply: OutgoingMessage = {
+            text: engineResponse.reply,
+            quickReplies: engineResponse.actions
+              ?.filter((a) => a.actionType === 'quick_reply')
+              .map((a) => ({ label: a.label, payload: a.payload })),
+          };
+
+          if (engineResponse.references?.length > 0) {
+            const refs = engineResponse.references
+              .map((r, i) => `[${i + 1}] ${r.title}`)
+              .join('\n');
+            finalReply.text += `\n\n📎 Tham khảo:\n${refs}`;
+          }
+
+          await streamHandle.finalize(finalReply);
+        } catch (streamErr) {
+          logger.warn('Streaming failed, falling back to unary', {
+            requestId,
+            error: (streamErr as Error)?.message,
+          });
+          // Fallback to unary — send as regular message
+          engineResponse = await this.taxEngine.processMessage(
+            requestId,
+            message.text || `[${message.type}]`,
+            session,
+            customerProfile,
+            activeCases,
+          );
+          const reply = this.buildReply(engineResponse);
+          await streamHandle.finalize(reply);
+        }
+      } else {
+        // Unary path (no streaming support or sendStreamStart failed)
+        engineResponse = await this.taxEngine.processMessage(
+          requestId,
+          message.text || `[${message.type}]`,
+          session,
+          customerProfile,
+          activeCases,
+        );
+        const reply = this.buildReply(engineResponse);
+        await this.sendReply(message, reply);
       }
-
-      await this.sendReply(message, reply);
 
       // 7. Record assistant reply
       await this.sessionManager.recordAssistantReply(session.sessionId, engineResponse.reply);
@@ -207,6 +245,27 @@ export class MessageRouter {
       default:
         return null;
     }
+  }
+
+  /**
+   * Build an OutgoingMessage from a TaxEngineResponse.
+   */
+  private buildReply(engineResponse: { reply: string; actions?: Array<{ actionType: string; label: string; payload: string }>; references?: Array<{ title: string }> }): OutgoingMessage {
+    const reply: OutgoingMessage = {
+      text: engineResponse.reply,
+      quickReplies: engineResponse.actions
+        ?.filter((a) => a.actionType === 'quick_reply')
+        .map((a) => ({ label: a.label, payload: a.payload })),
+    };
+
+    if (engineResponse.references?.length) {
+      const refs = engineResponse.references
+        .map((r, i) => `[${i + 1}] ${r.title}`)
+        .join('\n');
+      reply.text += `\n\n📎 Tham khảo:\n${refs}`;
+    }
+
+    return reply;
   }
 
   /**
