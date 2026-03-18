@@ -173,6 +173,41 @@ export class TelegramAdapter implements ChannelAdapter {
       logger.info('Telegram webhook set', { url: config.telegram.webhookUrl });
     } else {
       // Fallback: polling mode (local dev without tunnel).
+<<<<<<< claude/update-tax-data-flow-iVbjX
+      await this.startPollingWithRetry();
+    }
+  }
+
+  /**
+   * Start polling with retry + exponential backoff.
+   * If all retries fail, log a warning but do NOT throw — the gateway
+   * can still serve HTTP and the watchdog will attempt reconnection.
+   */
+  private async startPollingWithRetry(maxRetries = 4): Promise<void> {
+    const delays = [2000, 4000, 8000, 16000]; // exponential backoff
+
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        await this.bot.telegram.deleteWebhook({ drop_pending_updates: false });
+        await this.bot.launch({ dropPendingUpdates: false });
+        logger.info('Telegram bot started in polling mode');
+        this.setupPollingWatchdog();
+        return;
+      } catch (err) {
+        if (attempt < maxRetries) {
+          const delay = delays[attempt] ?? 16000;
+          logger.warn(
+            `Telegram polling start failed (attempt ${attempt + 1}/${maxRetries + 1}), retrying in ${delay / 1000}s`,
+            { error: err },
+          );
+          await new Promise((r) => setTimeout(r, delay));
+        } else {
+          logger.error(
+            `Telegram polling failed after ${maxRetries + 1} attempts — gateway will start without Telegram. ` +
+            'Watchdog will retry later.',
+            { error: err },
+          );
+=======
       await this.bot.telegram.deleteWebhook({ drop_pending_updates: false });
       this.bot.launch({ dropPendingUpdates: false }).catch((err) => {
         logger.error('Telegram polling error', { error: err });
@@ -195,9 +230,31 @@ export class TelegramAdapter implements ChannelAdapter {
           } catch (err) {
             logger.error('Watchdog failed to restart polling', { error: err });
           }
+>>>>>>> main
         }
-      }, 300_000); // Check every 5 minutes instead of every 60s
+      }
     }
+  }
+
+  private setupPollingWatchdog(): void {
+    // Watchdog: restart polling if no updates for 10 minutes.
+    // Threshold is generous to avoid unnecessary restarts when the bot
+    // simply has no incoming messages (previously 2 min — too aggressive,
+    // caused burst API calls every 60s that interfered with other bots).
+    this.watchdogTimer = setInterval(async () => {
+      if (!this.isPollingHealthy(600_000)) {
+        logger.warn('Telegram polling watchdog: no updates for 10 min, restarting polling');
+        try {
+          this.bot.stop('SIGTERM');
+          await this.bot.telegram.deleteWebhook({ drop_pending_updates: false });
+          await this.bot.launch({ dropPendingUpdates: false });
+          this.lastUpdateTime = Date.now();
+          logger.info('Telegram polling restarted by watchdog');
+        } catch (err) {
+          logger.error('Watchdog failed to restart polling', { error: err });
+        }
+      }
+    }, 300_000); // Check every 5 minutes
   }
 
   onMessage(handler: MessageHandler): void {
