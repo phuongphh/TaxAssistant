@@ -120,3 +120,86 @@ class PITRule(TaxRule):
             "• Kê khai: Hàng tháng hoặc hàng quý\n"
             "• Quyết toán: Hàng năm (trước 31/3 năm sau)"
         )
+
+    def get_consultation(
+        self, customer_type: CustomerType, entities: dict | None = None,
+    ) -> str:
+        entities = entities or {}
+        num_dependents = entities.get("dependents", 0)
+        min_rate = int(PIT_BRACKETS[0][1] * 100)
+        max_rate = int(PIT_BRACKETS[-1][1] * 100)
+
+        lines = ["Tư vấn Thuế Thu nhập cá nhân (TNCN):\n"]
+
+        # --- 1. Giảm trừ gia cảnh ---
+        lines.append("1. Giảm trừ gia cảnh:")
+        lines.append(
+            f"   • Bản thân: {PERSONAL_DEDUCTION / 1e6:.1f} triệu/tháng"
+        )
+        lines.append(
+            f"   • Mỗi người phụ thuộc: {DEPENDENT_DEDUCTION / 1e6:.1f} triệu/tháng"
+        )
+        if num_dependents:
+            total_dep = DEPENDENT_DEDUCTION * num_dependents
+            total_deduction = PERSONAL_DEDUCTION + total_dep
+            lines.append(
+                f"   → Với {num_dependents} người phụ thuộc: "
+                f"giảm trừ {total_deduction / 1e6:.1f} triệu/tháng "
+                f"({PERSONAL_DEDUCTION / 1e6:.1f} + {num_dependents}×{DEPENDENT_DEDUCTION / 1e6:.1f})"
+            )
+            lines.append(
+                f"   → Thu nhập ≤ {total_deduction / 1e6:.1f} triệu/tháng: "
+                "không phải nộp thuế TNCN"
+            )
+        else:
+            lines.append(
+                f"   → Không có NPT: thu nhập ≤ {PERSONAL_DEDUCTION / 1e6:.1f} triệu/tháng "
+                "không phải nộp thuế"
+            )
+
+        # --- 2. Biểu thuế lũy tiến ---
+        lines.append(f"\n2. Biểu thuế lũy tiến ({len(PIT_BRACKETS)} bậc):")
+        prev = 0
+        for limit, rate in PIT_BRACKETS:
+            r = int(rate * 100)
+            if limit == float("inf"):
+                lines.append(f"   • Trên {prev / 1e6:.0f} triệu: {r}%")
+            else:
+                lines.append(
+                    f"   • {prev / 1e6:.0f} - {limit / 1e6:.0f} triệu: {r}%"
+                )
+            prev = limit
+
+        # --- 3. Đăng ký NPT (if relevant) ---
+        show_npt = num_dependents or customer_type in (
+            CustomerType.HOUSEHOLD, CustomerType.INDIVIDUAL,
+        )
+        if show_npt:
+            lines.append("\n3. Đăng ký người phụ thuộc:")
+            lines.append("   • Mẫu đăng ký: 09-DK-TCT (ban đầu) hoặc bổ sung")
+            lines.append("   • Đối tượng: con dưới 18 tuổi; con trên 18 đang học;")
+            lines.append("     cha mẹ, vợ/chồng không có thu nhập hoặc thu nhập")
+            lines.append(f"     không vượt {1_500_000 / 1e6:.1f} triệu/tháng")
+            lines.append("   • Nộp cho: cơ quan thuế hoặc qua đơn vị chi trả thu nhập")
+
+        # --- 4. Kê khai & quyết toán ---
+        section_num = 4 if show_npt else 3
+        lines.append(f"\n{section_num}. Kê khai & Quyết toán:")
+        lines.append("   • Kê khai: Hàng tháng hoặc hàng quý")
+        lines.append("   • Quyết toán: Trước 31/3 năm sau")
+        if customer_type in (CustomerType.HOUSEHOLD, CustomerType.INDIVIDUAL):
+            lines.append("   • Cá nhân tự quyết toán hoặc ủy quyền cho đơn vị chi trả")
+
+        # --- 5. Căn cứ pháp lý ---
+        section_num += 1
+        lines.append(f"\n{section_num}. Căn cứ pháp lý:")
+        for ref in _LEGAL_BASIS:
+            lines.append(f"   • {ref}")
+
+        # --- Gợi ý ---
+        lines.append(
+            "\n💡 Để tính thuế cụ thể, bạn có thể cung cấp thêm thu nhập hàng tháng. "
+            "VD: \"lương 50 triệu, 2 người phụ thuộc\""
+        )
+
+        return "\n".join(lines)

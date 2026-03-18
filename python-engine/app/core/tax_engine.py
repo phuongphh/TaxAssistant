@@ -367,7 +367,31 @@ class TaxEngine:
 
         # Fallback to hardcoded rule info
         if category and category in self.tax_rules:
-            info = self.tax_rules[category].get_info(customer_type)
+            rule = self.tax_rules[category]
+            entities = classification.extracted_entities
+
+            # When the user provided concrete numbers (income/revenue,
+            # dependents, etc.) we can go beyond generic info and give a
+            # personalised consultation by running the tax calculation.
+            if entities.get("amount"):
+                context = TaxContext(
+                    customer_type=customer_type,
+                    revenue=entities.get("amount"),
+                    income=entities.get("amount"),
+                    extra=entities,
+                )
+                result = rule.calculate(context)
+                references = [
+                    {"title": ref, "url": "", "snippet": ""}
+                    for ref in result.legal_basis
+                ]
+                return self._build_response(
+                    reply=result.explanation,
+                    classification=classification,
+                    references=references,
+                )
+
+            info = rule.get_consultation(customer_type, entities)
             return self._build_response(reply=info, classification=classification)
 
         overview = self._get_tax_overview(customer_type)
