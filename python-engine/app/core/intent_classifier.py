@@ -60,6 +60,12 @@ _INTENT_PATTERNS: list[tuple[Intent, list[str]]] = [
         r"thuế suất", r"quy định .+ thuế", r"luật thuế", r"nghị định",
         r"về thuế", r"thuế gtgt\b", r"thuế tndn\b", r"thuế tncn\b",
         r"tra cứu",
+        # Full-form tax names (users often write these out, not abbreviations)
+        r"thuế thu nhập cá nhân", r"thuế thu nhập doanh nghiệp",
+        r"thuế giá trị gia tăng", r"thuế môn bài",
+        # Consultation / advisory keywords
+        r"tư vấn.*thuế", r"tư vấn.*thu nhập", r"tư vấn.*kê khai",
+        r"tư vấn.*đăng ký", r"tư vấn.*hóa đơn",
     ]),
     (Intent.TAX_DEADLINE, [
         r"hạn nộp", r"thời hạn", r"deadline", r"khi nào nộp",
