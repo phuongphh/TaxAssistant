@@ -11,7 +11,7 @@ const envSchema = z.object({
 
   // Telegram
   TELEGRAM_BOT_TOKEN: z.string().min(1),
-  TELEGRAM_WEBHOOK_URL: z.string().url().optional(),
+  TELEGRAM_WEBHOOK_URL: z.string().url().optional().or(z.literal('')),
   TELEGRAM_WEBHOOK_SECRET: z.string().optional(),
 
   // Zalo OA

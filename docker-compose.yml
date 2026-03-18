@@ -43,7 +43,7 @@ services:
       - ./proto:/proto
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/health/live', (r) => process.exit(r.statusCode === 200 ? 0 : 1))"]
+      test: [ "CMD", "node", "-e", "require('http').get('http://localhost:3000/health/live', (r) => process.exit(r.statusCode === 200 ? 0 : 1))" ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -79,6 +79,8 @@ services:
       - LLM_PROVIDER=${LLM_PROVIDER:-openai_compatible}
       - LLM_MODEL=${LLM_MODEL:-glm-5}
       - CHROMA_PERSIST_DIR=/app/data/chroma
+      - PORTAL_ADMIN_PASSWORD_HASH=${PORTAL_ADMIN_PASSWORD_HASH}
+
     depends_on:
       redis:
         condition: service_healthy

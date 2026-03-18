@@ -30,7 +30,8 @@ router.get('/health', async (_req: Request, res: Response) => {
 
   // Check Telegram polling health (only relevant when using polling, not webhook)
   if (_telegramAdapter && !config.telegram.webhookUrl) {
-    checks.telegramPolling = _telegramAdapter.isPollingHealthy() ? 'ok' : 'error';
+    // Cho phép 10 phút không có update vẫn coi là healthy
+    checks.telegramPolling = _telegramAdapter.isPollingHealthy(600_000) ? 'ok' : 'error';
   }
 
   const allHealthy = Object.values(checks).every((v) => v === 'ok');
