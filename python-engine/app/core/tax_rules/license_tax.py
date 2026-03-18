@@ -110,3 +110,55 @@ class LicenseTaxRule(TaxRule):
             "• DN mới: Miễn năm đầu tiên\n"
             "• Nộp: Trước ngày 30/01 hàng năm"
         )
+
+    def get_consultation(
+        self, customer_type: CustomerType, entities: dict | None = None,
+    ) -> str:
+        is_household = customer_type in (
+            CustomerType.HOUSEHOLD, CustomerType.INDIVIDUAL,
+        )
+
+        lines = ["Tư vấn Thuế Môn bài:\n"]
+
+        lines.append("1. Biểu mức thuế:")
+        if is_household:
+            lines.append("   Hộ kinh doanh (theo doanh thu/năm):")
+            for threshold, amount in LICENSE_TAX_HOUSEHOLD:
+                if threshold == 0 and amount == 0:
+                    lines.append("   • DT ≤ 100 triệu: Miễn thuế môn bài")
+                elif threshold == 100_000_000:
+                    lines.append(f"   • DT 100-300 triệu: {amount:,.0f} VND/năm")
+                elif threshold == 300_000_000:
+                    lines.append(f"   • DT 300-500 triệu: {amount:,.0f} VND/năm")
+                else:
+                    lines.append(f"   • DT > {threshold / 1e6:.0f} triệu: {amount:,.0f} VND/năm")
+        else:
+            lines.append("   Doanh nghiệp (theo vốn điều lệ/vốn đầu tư):")
+            for threshold, amount in LICENSE_TAX_ENTERPRISE:
+                if threshold == 0:
+                    lines.append(f"   • Vốn ≤ 10 tỷ: {amount:,.0f} VND/năm")
+                else:
+                    lines.append(f"   • Vốn > {threshold / 1e9:.0f} tỷ: {amount:,.0f} VND/năm")
+
+        lines.append("\n2. Miễn thuế môn bài:")
+        if is_household:
+            lines.append("   • Hộ KD có doanh thu ≤ 100 triệu VND/năm")
+            lines.append("   • Cá nhân, nhóm cá nhân, hộ gia đình hoạt động sản xuất")
+            lines.append("     nông/lâm/ngư/diêm nghiệp")
+        else:
+            lines.append("   • DN mới thành lập: miễn thuế môn bài năm đầu tiên")
+            lines.append("   • Chi nhánh, văn phòng đại diện, địa điểm KD: nộp riêng")
+
+        lines.append("\n3. Thời hạn nộp:")
+        lines.append("   • Hạn: Trước ngày 30/01 hàng năm")
+        lines.append("   • DN mới thành lập trong năm: nộp trong 30 ngày kể từ ngày được cấp ĐKKD")
+
+        lines.append("\n4. Căn cứ pháp lý:")
+        lines.append("   • Nghị định 139/2016/NĐ-CP")
+        lines.append("   • Thông tư 302/2016/TT-BTC")
+
+        lines.append(
+            "\n💡 Để tính mức thuế cụ thể, bạn có thể cung cấp vốn điều lệ hoặc doanh thu. "
+            "VD: \"thuế môn bài vốn 5 tỷ\""
+        )
+        return "\n".join(lines)

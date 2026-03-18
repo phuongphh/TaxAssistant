@@ -391,7 +391,7 @@ class TaxEngine:
                     references=references,
                 )
 
-            info = rule.get_info(customer_type)
+            info = rule.get_consultation(customer_type, entities)
             return self._build_response(reply=info, classification=classification)
 
         overview = self._get_tax_overview(customer_type)
