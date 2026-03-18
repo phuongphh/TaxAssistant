@@ -93,11 +93,33 @@ def _init_rag_service():
         return None
 
 
-async def _ensure_tables():
-    """Create new tables if they don't exist (idempotent)."""
-    async with db_engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    logger.info("Database tables ensured")
+async def _ensure_tables(max_retries: int = 3, base_delay: float = 2.0):
+    """Create new tables if they don't exist (idempotent).
+
+    Retries with exponential backoff on transient database errors.
+    """
+    import asyncio
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            async with db_engine.begin() as conn:
+                await conn.run_sync(Base.metadata.create_all)
+            logger.info("Database tables ensured")
+            return
+        except Exception as e:
+            if attempt < max_retries:
+                delay = base_delay * (2 ** (attempt - 1))
+                logger.warning(
+                    "Database connection failed (attempt %d/%d): %s: %s — retrying in %.1fs",
+                    attempt, max_retries, type(e).__name__, e, delay,
+                )
+                await asyncio.sleep(delay)
+            else:
+                logger.error(
+                    "Database connection failed after %d attempts: %s: %s",
+                    max_retries, type(e).__name__, e,
+                )
+                raise
 
 
 class TaxEngineServicer(pb2_grpc.TaxEngineServicer):
@@ -109,9 +131,17 @@ class TaxEngineServicer(pb2_grpc.TaxEngineServicer):
         self.doc_processor = DocumentProcessor()
         self.onboarding = OnboardingHandler()
 
+    # Maximum time (seconds) for the engine to process a single message.
+    # Must be LESS than the gRPC deadline set by the gateway (180s) to
+    # guarantee we always return a response instead of letting the deadline
+    # fire silently.
+    _ENGINE_TIMEOUT = 150.0
+
     async def ProcessMessage(self, request, context):
         """Process a user's tax-related message."""
+        import asyncio
         import time
+
         start = time.monotonic()
         logger.info(
             "gRPC ProcessMessage: request_id=%s msg='%s'",
@@ -179,7 +209,7 @@ class TaxEngineServicer(pb2_grpc.TaxEngineServicer):
 
             # Check if customer is in onboarding flow
             if customer_profile and customer_profile.get("onboarding_step") in ("new", "collecting_type", "collecting_info"):
-                result = await self._handle_onboarding(
+                coro = self._handle_onboarding(
                     request, customer_profile, customer_type
                 )
             else:
@@ -190,13 +220,39 @@ class TaxEngineServicer(pb2_grpc.TaxEngineServicer):
                     recent_summaries=summaries,
                 )
 
-                result = await self.engine.process_message(
+                coro = self.engine.process_message(
                     message=request.message,
                     customer_type=customer_type,
                     session_context=session_context,
                     conversation_history=conversation_history,
                     memory_context=memory_context,
                 )
+
+            # Enforce a hard timeout so we ALWAYS return a response before
+            # the gRPC deadline fires.  Without this, slow LLM/DB calls
+            # could exceed the 180s deadline and the client gets nothing.
+            try:
+                result = await asyncio.wait_for(coro, timeout=self._ENGINE_TIMEOUT)
+            except asyncio.TimeoutError:
+                elapsed = time.monotonic() - start
+                logger.error(
+                    "ProcessMessage TIMEOUT: request_id=%s elapsed=%.2fs (limit=%.0fs)",
+                    request.request_id, elapsed, self._ENGINE_TIMEOUT,
+                )
+                result = {
+                    "reply": (
+                        "Xin lỗi, hệ thống xử lý quá lâu. "
+                        "Bạn vui lòng thử lại với câu hỏi ngắn gọn hơn hoặc "
+                        "sử dụng tính năng tính thuế cơ bản."
+                    ),
+                    "actions": [
+                        {"label": "Tính thuế", "action_type": "quick_reply", "payload": "tính thuế"},
+                        {"label": "Hạn nộp thuế", "action_type": "quick_reply", "payload": "hạn nộp thuế"},
+                    ],
+                    "references": [],
+                    "confidence": 0.0,
+                    "intent": "timeout",
+                }
 
             elapsed = time.monotonic() - start
             logger.info(
@@ -521,9 +577,21 @@ class TaxEngineServicer(pb2_grpc.TaxEngineServicer):
 
 
 async def serve_grpc() -> grpc.aio.Server:
-    """Start the gRPC server."""
-    # Ensure database tables exist
-    await _ensure_tables()
+    """Start the gRPC server.
+
+    Handles database initialization failures gracefully — if the database
+    is unreachable the server still starts (DB-dependent RPCs will fail
+    individually rather than preventing all message processing).
+    """
+    # Ensure database tables exist (retry with backoff)
+    try:
+        await _ensure_tables()
+    except Exception:
+        logger.error(
+            "Could not connect to database — starting gRPC server WITHOUT "
+            "database support. Customer profiles and support cases will be "
+            "unavailable until the database is reachable."
+        )
 
     server = grpc.aio.server(futures.ThreadPoolExecutor(max_workers=10))
     pb2_grpc.add_TaxEngineServicer_to_server(TaxEngineServicer(), server)

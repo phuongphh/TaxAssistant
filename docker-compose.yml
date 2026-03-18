@@ -37,7 +37,7 @@ services:
       postgres:
         condition: service_healthy
       tax-engine:
-        condition: service_started
+        condition: service_healthy
     volumes:
       - ./node-gateway/src:/app/src
       - ./proto:/proto
@@ -89,7 +89,14 @@ services:
     volumes:
       - ./python-engine/app:/app/app
       - ./proto:/proto
+      - chroma_data:/app/data/chroma
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/live')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
   cloudflare-tunnel:
     image: cloudflare/cloudflared:latest
     restart: always
@@ -131,3 +138,4 @@ services:
 volumes:
   postgres_data:
   redis_data:
+  chroma_data:
