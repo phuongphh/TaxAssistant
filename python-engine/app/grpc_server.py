@@ -131,9 +131,17 @@ class TaxEngineServicer(pb2_grpc.TaxEngineServicer):
         self.doc_processor = DocumentProcessor()
         self.onboarding = OnboardingHandler()
 
+    # Maximum time (seconds) for the engine to process a single message.
+    # Must be LESS than the gRPC deadline set by the gateway (180s) to
+    # guarantee we always return a response instead of letting the deadline
+    # fire silently.
+    _ENGINE_TIMEOUT = 150.0
+
     async def ProcessMessage(self, request, context):
         """Process a user's tax-related message."""
+        import asyncio
         import time
+
         start = time.monotonic()
         logger.info(
             "gRPC ProcessMessage: request_id=%s msg='%s'",
@@ -201,7 +209,7 @@ class TaxEngineServicer(pb2_grpc.TaxEngineServicer):
 
             # Check if customer is in onboarding flow
             if customer_profile and customer_profile.get("onboarding_step") in ("new", "collecting_type", "collecting_info"):
-                result = await self._handle_onboarding(
+                coro = self._handle_onboarding(
                     request, customer_profile, customer_type
                 )
             else:
@@ -212,13 +220,39 @@ class TaxEngineServicer(pb2_grpc.TaxEngineServicer):
                     recent_summaries=summaries,
                 )
 
-                result = await self.engine.process_message(
+                coro = self.engine.process_message(
                     message=request.message,
                     customer_type=customer_type,
                     session_context=session_context,
                     conversation_history=conversation_history,
                     memory_context=memory_context,
                 )
+
+            # Enforce a hard timeout so we ALWAYS return a response before
+            # the gRPC deadline fires.  Without this, slow LLM/DB calls
+            # could exceed the 180s deadline and the client gets nothing.
+            try:
+                result = await asyncio.wait_for(coro, timeout=self._ENGINE_TIMEOUT)
+            except asyncio.TimeoutError:
+                elapsed = time.monotonic() - start
+                logger.error(
+                    "ProcessMessage TIMEOUT: request_id=%s elapsed=%.2fs (limit=%.0fs)",
+                    request.request_id, elapsed, self._ENGINE_TIMEOUT,
+                )
+                result = {
+                    "reply": (
+                        "Xin lỗi, hệ thống xử lý quá lâu. "
+                        "Bạn vui lòng thử lại với câu hỏi ngắn gọn hơn hoặc "
+                        "sử dụng tính năng tính thuế cơ bản."
+                    ),
+                    "actions": [
+                        {"label": "Tính thuế", "action_type": "quick_reply", "payload": "tính thuế"},
+                        {"label": "Hạn nộp thuế", "action_type": "quick_reply", "payload": "hạn nộp thuế"},
+                    ],
+                    "references": [],
+                    "confidence": 0.0,
+                    "intent": "timeout",
+                }
 
             elapsed = time.monotonic() - start
             logger.info(

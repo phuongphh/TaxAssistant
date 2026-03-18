@@ -16,12 +16,16 @@ from app.ai.prompts import SYSTEM_PROMPT
 logger = logging.getLogger(__name__)
 
 # LLM API can take 30-60s+ for complex prompts with conversation history.
-# read timeout must fit within gRPC deadline (180s) with room for overhead.
-_LLM_READ_TIMEOUT = 120.0
+# Total time budget must fit within gRPC deadline (180s) with room for
+# overhead (DB queries, ChromaDB search, proto serialisation ≈ 10-20s).
+#
+# Budget:  60s per attempt × 2 attempts + 2s delay = ~122s  (leaves ~58s headroom)
+# Previous: 120s × 4 attempts + 14s delays = ~494s → ALWAYS exceeded gRPC deadline!
+_LLM_READ_TIMEOUT = 60.0
 _LLM_CONNECT_TIMEOUT = 10.0
 
 # Retry settings for transient errors (rate limit, server errors)
-_MAX_RETRIES = 3
+_MAX_RETRIES = 1  # 1 retry = 2 total attempts (fits within gRPC deadline)
 _RETRY_BASE_DELAY = 2.0  # seconds, doubles each retry
 
 
