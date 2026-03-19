@@ -104,8 +104,11 @@ After each bot response, add **3 relevant text-based suggestions**.
 - [ ] Suggestions update when conversation topic changes
 - [ ] No breaking changes to existing functionality
 
-## Claude Code Prompt
-
+## Implementation Notes
+- Update  command in 
+- Implement conversation context tracking for suggestion generation
+- Suggestions should be text-based (numbered 1, 2, 3) not buttons
+- Maintain backward compatibility with existing functionality
 
 ## Notes
 - This is a **user experience enhancement**, not core functionality change
