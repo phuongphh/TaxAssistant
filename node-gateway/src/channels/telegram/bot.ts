@@ -124,13 +124,16 @@ export class TelegramAdapter implements ChannelAdapter {
       try {
         await ctx.reply(
           'Xin chào! Tôi là Trợ lý Thuế ảo. 🇻🇳\n\n' +
-          'Tôi có thể hỗ trợ bạn các vấn đề về:\n' +
-          '• Thuế GTGT (VAT)\n' +
-          '• Thuế thu nhập doanh nghiệp (CIT)\n' +
-          '• Thuế thu nhập cá nhân (PIT)\n' +
-          '• Thuế môn bài\n' +
-          '• Kê khai và nộp thuế\n\n' +
-          'Hãy gửi câu hỏi của bạn để tôi hỗ trợ!',
+          'Tôi có thể hỗ trợ bạn các dịch vụ:\n' +
+          '1. Tính thuế (GTGT, TNDN, TNCN, Môn bài)\n' +
+          '2. Hướng dẫn kê khai & quyết toán thuế\n' +
+          '3. Đăng ký mã số thuế\n' +
+          '4. Kiểm tra hóa đơn, chứng từ\n' +
+          '5. Dịch vụ tư vấn về thuế với các dẫn chứng từ văn bản pháp luật\n' +
+          '6. Tư vấn xử phạt & vi phạm thuế\n' +
+          '7. Hỗ trợ hoàn thuế GTGT\n' +
+          '8. Quyết toán thuế năm\n\n' +
+          'Hãy gửi câu hỏi của bạn hoặc chọn số dịch vụ để bắt đầu!',
         );
         logger.info('/start command processed successfully', {
           userId: ctx.from?.id,
