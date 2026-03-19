@@ -828,7 +828,8 @@ class TaxEngine:
             actions=[
                 {"label": "Tính thuế", "action_type": "quick_reply", "payload": "tính thuế"},
                 {"label": "Kê khai thuế", "action_type": "quick_reply", "payload": "kê khai thuế"},
-                {"label": "Tư vấn pháp luật", "action_type": "quick_reply", "payload": "tư vấn thuế dẫn chứng văn bản pháp luật"},
+                {"label": "Hạn nộp thuế", "action_type": "quick_reply", "payload": "hạn nộp thuế"},
+                {"label": "Đăng ký MST", "action_type": "quick_reply", "payload": "đăng ký mã số thuế"},
             ],
         )
 
