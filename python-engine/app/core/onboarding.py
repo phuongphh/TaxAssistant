@@ -251,7 +251,8 @@ class OnboardingHandler:
             "actions": [
                 {"label": "Tính thuế", "action_type": "quick_reply", "payload": "tính thuế"},
                 {"label": "Kê khai thuế", "action_type": "quick_reply", "payload": "kê khai thuế"},
-                {"label": "Tra cứu quy định", "action_type": "quick_reply", "payload": "tra cứu quy định thuế"},
+                {"label": "Hạn nộp thuế", "action_type": "quick_reply", "payload": "hạn nộp thuế"},
+                {"label": "Đăng ký MST", "action_type": "quick_reply", "payload": "đăng ký mã số thuế"},
             ],
             "update_fields": update_fields,
             "onboarding_complete": True,
@@ -274,7 +275,8 @@ class OnboardingHandler:
             "actions": [
                 {"label": "Tính thuế", "action_type": "quick_reply", "payload": "tính thuế"},
                 {"label": "Kê khai thuế", "action_type": "quick_reply", "payload": "kê khai thuế"},
-                {"label": "Tra cứu quy định", "action_type": "quick_reply", "payload": "tra cứu quy định thuế"},
+                {"label": "Hạn nộp thuế", "action_type": "quick_reply", "payload": "hạn nộp thuế"},
+                {"label": "Đăng ký MST", "action_type": "quick_reply", "payload": "đăng ký mã số thuế"},
             ],
             "update_fields": {},
             "onboarding_complete": False,

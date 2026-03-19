@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 
 from app.core.intent_classifier import ClassificationResult, Intent, IntentClassifier
 from app.core.onboarding import OnboardingHandler
-from app.core.suggestions import format_suggestions, generate_suggestions
+from app.core.suggestions import generate_suggestions
 from app.core.tax_rules.base import CustomerType, TaxCategory, TaxContext, TaxResult
 from app.core.tax_rules.cit import CITRule
 from app.core.tax_rules.license_tax import LicenseTaxRule
@@ -790,6 +790,8 @@ class TaxEngine:
         Uses memory_context to show customer info even when LLM is unavailable,
         proving to the user that the bot remembers them.
         """
+        from app.core.onboarding import SERVICE_MENU
+
         type_label = {
             CustomerType.SME: "Doanh nghiệp",
             CustomerType.HOUSEHOLD: "Hộ kinh doanh",
@@ -813,11 +815,7 @@ class TaxEngine:
 
         reply = (
             f"{greeting}Tôi có thể hỗ trợ bạn các dịch vụ sau:\n\n"
-            "1. Tính thuế (GTGT, TNDN, TNCN, Môn bài)\n"
-            "2. Hướng dẫn kê khai & quyết toán thuế\n"
-            "3. Tra cứu quy định & văn bản pháp luật\n"
-            "4. Hạn nộp thuế\n"
-            "5. Thủ tục đăng ký mã số thuế\n\n"
+            f"{SERVICE_MENU}\n\n"
             "Bạn có thể gõ số hoặc mô tả câu hỏi cụ thể, ví dụ:\n"
             '• "Tính thuế GTGT doanh thu 500 triệu"\n'
             '• "Thuế TNCN lương 30 triệu 2 người phụ thuộc"\n'
@@ -836,6 +834,8 @@ class TaxEngine:
         )
 
     def _get_greeting(self, customer_type: CustomerType) -> str:
+        from app.core.onboarding import SERVICE_MENU
+
         type_label = {
             CustomerType.SME: " (Doanh nghiệp)",
             CustomerType.HOUSEHOLD: " (Hộ gia đình)",
@@ -844,11 +844,7 @@ class TaxEngine:
 
         return (
             f"Xin chào{type_label}! Tôi là Trợ lý Thuế ảo.\n\n"
-            "Tôi có thể hỗ trợ bạn:\n"
-            "• Tính thuế (GTGT, TNDN, TNCN, Môn bài)\n"
-            "• Tra cứu quy định thuế\n"
-            "• Hướng dẫn thủ tục kê khai\n"
-            "• Kiểm tra hóa đơn, chứng từ\n\n"
+            f"{SERVICE_MENU}\n\n"
             "Hãy gửi câu hỏi của bạn!"
         )
 
@@ -911,21 +907,22 @@ class TaxEngine:
         actions: list[dict] | None = None,
         references: list[dict] | None = None,
     ) -> dict:
-        suggestions = generate_suggestions(
-            classification.intent, classification.tax_category,
-        )
-        reply_with_suggestions = reply + format_suggestions(suggestions)
-
-        # Include suggestions as text_suggestion actions so the gateway can
-        # store them and resolve numeric shortcut selections ("1", "2", "3").
-        suggestion_actions = [
-            {"label": s, "action_type": "text_suggestion", "payload": s}
-            for s in suggestions
-        ]
+        if actions:
+            # Already has explicit buttons — don't add suggestion buttons
+            all_actions = actions
+        else:
+            # No buttons yet — generate context-aware suggestion buttons
+            suggestions = generate_suggestions(
+                classification.intent, classification.tax_category,
+            )
+            all_actions = [
+                {"label": s, "action_type": "quick_reply", "payload": s}
+                for s in suggestions
+            ]
 
         return {
-            "reply": reply_with_suggestions,
-            "actions": (actions or []) + suggestion_actions,
+            "reply": reply,
+            "actions": all_actions,
             "references": references or [],
             "confidence": classification.confidence,
             "category": classification.tax_category.value if classification.tax_category else "",

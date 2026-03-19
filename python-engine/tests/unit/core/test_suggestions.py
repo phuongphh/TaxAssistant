@@ -4,7 +4,7 @@ Tests for the context-aware suggestion generator.
 
 import pytest
 
-from app.core.suggestions import generate_suggestions, format_suggestions
+from app.core.suggestions import generate_suggestions
 from app.core.intent_classifier import Intent
 from app.core.tax_rules.base import TaxCategory
 
@@ -57,23 +57,3 @@ class TestGenerateSuggestions:
         result_with = generate_suggestions(Intent.PENALTY, TaxCategory.VAT)
         result_without = generate_suggestions(Intent.PENALTY)
         assert result_with == result_without
-
-
-class TestFormatSuggestions:
-    def test_format_has_header(self):
-        result = format_suggestions(["A", "B", "C"])
-        assert "Bạn muốn làm gì tiếp theo?" in result
-
-    def test_format_numbered(self):
-        result = format_suggestions(["Tính thuế", "Tra cứu", "Kê khai"])
-        assert "1. Tính thuế" in result
-        assert "2. Tra cứu" in result
-        assert "3. Kê khai" in result
-
-    def test_format_has_separator(self):
-        result = format_suggestions(["A", "B", "C"])
-        assert "---" in result
-
-    def test_format_starts_with_newline(self):
-        result = format_suggestions(["A", "B", "C"])
-        assert result.startswith("\n")
