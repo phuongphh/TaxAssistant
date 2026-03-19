@@ -251,7 +251,7 @@ class OnboardingHandler:
             "actions": [
                 {"label": "Tính thuế", "action_type": "quick_reply", "payload": "tính thuế"},
                 {"label": "Kê khai thuế", "action_type": "quick_reply", "payload": "kê khai thuế"},
-                {"label": "Tra cứu quy định", "action_type": "quick_reply", "payload": "tra cứu quy định thuế"},
+                {"label": "Tư vấn pháp luật", "action_type": "quick_reply", "payload": "tư vấn thuế dẫn chứng văn bản pháp luật"},
             ],
             "update_fields": update_fields,
             "onboarding_complete": True,
@@ -274,7 +274,7 @@ class OnboardingHandler:
             "actions": [
                 {"label": "Tính thuế", "action_type": "quick_reply", "payload": "tính thuế"},
                 {"label": "Kê khai thuế", "action_type": "quick_reply", "payload": "kê khai thuế"},
-                {"label": "Tra cứu quy định", "action_type": "quick_reply", "payload": "tra cứu quy định thuế"},
+                {"label": "Tư vấn pháp luật", "action_type": "quick_reply", "payload": "tư vấn thuế dẫn chứng văn bản pháp luật"},
             ],
             "update_fields": {},
             "onboarding_complete": False,
