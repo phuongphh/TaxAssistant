@@ -124,13 +124,16 @@ export class TelegramAdapter implements ChannelAdapter {
       try {
         await ctx.reply(
           'Xin chào! Tôi là Trợ lý Thuế ảo. 🇻🇳\n\n' +
-          'Tôi có thể hỗ trợ bạn các vấn đề về:\n' +
-          '• Thuế GTGT (VAT)\n' +
-          '• Thuế thu nhập doanh nghiệp (CIT)\n' +
-          '• Thuế thu nhập cá nhân (PIT)\n' +
-          '• Thuế môn bài\n' +
-          '• Kê khai và nộp thuế\n\n' +
-          'Hãy gửi câu hỏi của bạn để tôi hỗ trợ!',
+          'Tôi có thể hỗ trợ bạn các dịch vụ:\n' +
+          '1. Tính thuế (GTGT, TNDN, TNCN, Môn bài)\n' +
+          '2. Hướng dẫn kê khai & quyết toán thuế\n' +
+          '3. Đăng ký mã số thuế\n' +
+          '4. Kiểm tra hóa đơn, chứng từ\n' +
+          '5. Dịch vụ tư vấn về thuế với các dẫn chứng từ văn bản pháp luật\n' +
+          '6. Tư vấn xử phạt & vi phạm thuế\n' +
+          '7. Hỗ trợ hoàn thuế GTGT\n' +
+          '8. Quyết toán thuế năm\n\n' +
+          'Hãy gửi câu hỏi của bạn hoặc chọn số dịch vụ để bắt đầu!',
         );
         logger.info('/start command processed successfully', {
           userId: ctx.from?.id,
@@ -173,7 +176,6 @@ export class TelegramAdapter implements ChannelAdapter {
       logger.info('Telegram webhook set', { url: config.telegram.webhookUrl });
     } else {
       // Fallback: polling mode (local dev without tunnel).
-<<<<<<< claude/update-tax-data-flow-iVbjX
       await this.startPollingWithRetry();
     }
   }
@@ -207,30 +209,6 @@ export class TelegramAdapter implements ChannelAdapter {
             'Watchdog will retry later.',
             { error: err },
           );
-=======
-      await this.bot.telegram.deleteWebhook({ drop_pending_updates: false });
-      this.bot.launch({ dropPendingUpdates: false }).catch((err) => {
-        logger.error('Telegram polling error', { error: err });
-      });
-      logger.info('Telegram bot started in polling mode');
-
-      // Watchdog: restart polling if no updates for 10 minutes.
-      // Threshold is generous to avoid unnecessary restarts when the bot
-      // simply has no incoming messages (previously 2 min — too aggressive,
-      // caused burst API calls every 60s that interfered with other bots).
-      this.watchdogTimer = setInterval(async () => {
-        if (!this.isPollingHealthy(600_000)) {
-          logger.warn('Telegram polling watchdog: no updates for 10 min, restarting polling');
-          try {
-            this.bot.stop('SIGTERM');
-            await this.bot.telegram.deleteWebhook({ drop_pending_updates: false });
-            await this.bot.launch({ dropPendingUpdates: false });
-            this.lastUpdateTime = Date.now();
-            logger.info('Telegram polling restarted by watchdog');
-          } catch (err) {
-            logger.error('Watchdog failed to restart polling', { error: err });
-          }
->>>>>>> main
         }
       }
     }

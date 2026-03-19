@@ -77,6 +77,13 @@ export class SessionManager {
     return this.store.get(sessionId);
   }
 
+  /**
+   * Update session context with partial key-value data.
+   */
+  async updateContext(sessionId: string, context: Record<string, unknown>): Promise<void> {
+    await this.store.updateContext(sessionId, context);
+  }
+
   async disconnect(): Promise<void> {
     await this.store.disconnect();
   }

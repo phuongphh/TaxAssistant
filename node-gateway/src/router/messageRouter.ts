@@ -105,6 +105,17 @@ export class MessageRouter {
         return;
       }
 
+      // 3.5. Resolve suggestion shortcuts ("1", "2", "3")
+      let resolvedText = message.text || `[${message.type}]`;
+      const trimmed = resolvedText.trim();
+      if (/^[1-3]$/.test(trimmed)) {
+        const suggestions = session.context?.lastSuggestions as string[] | undefined;
+        if (suggestions && suggestions.length >= Number(trimmed)) {
+          resolvedText = suggestions[Number(trimmed) - 1];
+          logger.info('Resolved suggestion shortcut: "%s" → "%s"', trimmed, resolvedText);
+        }
+      }
+
       // 4. Record user message
       if (message.text) {
         await this.sessionManager.recordUserMessage(session.sessionId, message.text);
@@ -122,13 +133,13 @@ export class MessageRouter {
 
       const engineResponse = await this.taxEngine.processMessage(
         requestId,
-        message.text || `[${message.type}]`,
+        resolvedText,
         session,
         customerProfile,
         activeCases,
       );
 
-      // 6. Build and send reply
+      // 6. Build and send reply (filter out text_suggestion actions)
       const reply = this.buildReply(engineResponse);
 
       if (streamHandle) {
@@ -138,7 +149,15 @@ export class MessageRouter {
         await this.sendReply(message, reply);
       }
 
-      // 7. Record assistant reply
+      // 7. Store suggestions in session for next-turn shortcut resolution
+      const textSuggestions = engineResponse.actions
+        ?.filter((a: { actionType: string }) => a.actionType === 'text_suggestion')
+        .map((a: { payload: string }) => a.payload) ?? [];
+      if (textSuggestions.length > 0) {
+        await this.sessionManager.updateContext(session.sessionId, { lastSuggestions: textSuggestions });
+      }
+
+      // 8. Record assistant reply
       await this.sessionManager.recordAssistantReply(session.sessionId, engineResponse.reply);
     } catch (error: any) {
       const errorName = error?.name ?? 'UnknownError';
@@ -212,6 +231,8 @@ export class MessageRouter {
   private buildReply(engineResponse: { reply: string; actions?: Array<{ actionType: string; label: string; payload: string }>; references?: Array<{ title: string }> }): OutgoingMessage {
     const reply: OutgoingMessage = {
       text: engineResponse.reply,
+      // Only show quick_reply actions as inline buttons; text_suggestion
+      // actions are rendered as numbered text in the reply body itself.
       quickReplies: engineResponse.actions
         ?.filter((a) => a.actionType === 'quick_reply')
         .map((a) => ({ label: a.label, payload: a.payload })),
