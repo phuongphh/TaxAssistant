@@ -139,7 +139,7 @@ export class MessageRouter {
         activeCases,
       );
 
-      // 6. Build and send reply (filter out text_suggestion actions)
+      // 6. Build and send reply (quick_reply actions become inline buttons)
       const reply = this.buildReply(engineResponse);
 
       if (streamHandle) {
@@ -149,12 +149,12 @@ export class MessageRouter {
         await this.sendReply(message, reply);
       }
 
-      // 7. Store suggestions in session for next-turn shortcut resolution
-      const textSuggestions = engineResponse.actions
-        ?.filter((a: { actionType: string }) => a.actionType === 'text_suggestion')
+      // 7. Store quick_reply actions in session for next-turn shortcut resolution
+      const quickReplies = engineResponse.actions
+        ?.filter((a: { actionType: string }) => a.actionType === 'quick_reply')
         .map((a: { payload: string }) => a.payload) ?? [];
-      if (textSuggestions.length > 0) {
-        await this.sessionManager.updateContext(session.sessionId, { lastSuggestions: textSuggestions });
+      if (quickReplies.length > 0) {
+        await this.sessionManager.updateContext(session.sessionId, { lastSuggestions: quickReplies });
       }
 
       // 8. Record assistant reply
@@ -231,8 +231,7 @@ export class MessageRouter {
   private buildReply(engineResponse: { reply: string; actions?: Array<{ actionType: string; label: string; payload: string }>; references?: Array<{ title: string }> }): OutgoingMessage {
     const reply: OutgoingMessage = {
       text: engineResponse.reply,
-      // Only show quick_reply actions as inline buttons; text_suggestion
-      // actions are rendered as numbered text in the reply body itself.
+      // Show quick_reply actions as inline buttons.
       quickReplies: engineResponse.actions
         ?.filter((a) => a.actionType === 'quick_reply')
         .map((a) => ({ label: a.label, payload: a.payload })),

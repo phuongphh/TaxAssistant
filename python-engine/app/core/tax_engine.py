@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 
 from app.core.intent_classifier import ClassificationResult, Intent, IntentClassifier
 from app.core.onboarding import OnboardingHandler
-from app.core.suggestions import format_suggestions, generate_suggestions
+from app.core.suggestions import generate_suggestions
 from app.core.tax_rules.base import CustomerType, TaxCategory, TaxContext, TaxResult
 from app.core.tax_rules.cit import CITRule
 from app.core.tax_rules.license_tax import LicenseTaxRule
@@ -907,21 +907,22 @@ class TaxEngine:
         actions: list[dict] | None = None,
         references: list[dict] | None = None,
     ) -> dict:
-        suggestions = generate_suggestions(
-            classification.intent, classification.tax_category,
-        )
-        reply_with_suggestions = reply + format_suggestions(suggestions)
-
-        # Include suggestions as text_suggestion actions so the gateway can
-        # store them and resolve numeric shortcut selections ("1", "2", "3").
-        suggestion_actions = [
-            {"label": s, "action_type": "text_suggestion", "payload": s}
-            for s in suggestions
-        ]
+        if actions:
+            # Already has explicit buttons — don't add suggestion buttons
+            all_actions = actions
+        else:
+            # No buttons yet — generate context-aware suggestion buttons
+            suggestions = generate_suggestions(
+                classification.intent, classification.tax_category,
+            )
+            all_actions = [
+                {"label": s, "action_type": "quick_reply", "payload": s}
+                for s in suggestions
+            ]
 
         return {
-            "reply": reply_with_suggestions,
-            "actions": (actions or []) + suggestion_actions,
+            "reply": reply,
+            "actions": all_actions,
             "references": references or [],
             "confidence": classification.confidence,
             "category": classification.tax_category.value if classification.tax_category else "",
