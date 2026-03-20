@@ -191,7 +191,7 @@ export class TelegramAdapter implements ChannelAdapter {
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       try {
         await this.bot.telegram.deleteWebhook({ drop_pending_updates: false });
-        await this.bot.launch({ dropPendingUpdates: false });
+        this.bot.launch({ dropPendingUpdates: false });
         logger.info('Telegram bot started in polling mode');
         this.setupPollingWatchdog();
         return;
@@ -225,7 +225,7 @@ export class TelegramAdapter implements ChannelAdapter {
         try {
           this.bot.stop('SIGTERM');
           await this.bot.telegram.deleteWebhook({ drop_pending_updates: false });
-          await this.bot.launch({ dropPendingUpdates: false });
+          this.bot.launch({ dropPendingUpdates: false });
           this.lastUpdateTime = Date.now();
           logger.info('Telegram polling restarted by watchdog');
         } catch (err) {
