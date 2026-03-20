@@ -185,6 +185,11 @@ message CustomerProfileMsg {
   string first_name = 15;
   string last_name = 16;
   string display_name = 17;        // Computed: first_name + last_name or @username
+  // Contact and extended profile fields
+  string email = 18;
+  string phone = 19;
+  string address = 20;
+  map<string, string> profile_data = 21;  // Dynamic fields per business type
 }
 
 message CustomerLookup {

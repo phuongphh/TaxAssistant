@@ -110,6 +110,7 @@ class CustomerRepository:
             "province", "annual_revenue_range", "employee_count_range",
             "onboarding_step", "preferences", "tax_profile", "notes",
             "username", "first_name", "last_name", "display_name",
+            "email", "phone", "address", "profile_data",
         }
         update_data = {k: v for k, v in fields.items() if k in allowed_fields}
         if not update_data:
@@ -159,4 +160,8 @@ class CustomerRepository:
             "preferences": customer.preferences or {},
             "tax_profile": customer.tax_profile or {},
             "notes": customer.notes or [],
+            "email": customer.email or "",
+            "phone": customer.phone or "",
+            "address": customer.address or "",
+            "profile_data": customer.profile_data or {},
         }
