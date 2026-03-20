@@ -101,6 +101,11 @@ class Customer(Base):
     last_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
     display_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
 
+    # Contact info (user-provided via profile editing)
+    email: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    phone: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    address: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
     # Business info (collected during onboarding)
     customer_type: Mapped[str] = mapped_column(String(20), default="unknown")
     business_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
@@ -117,6 +122,7 @@ class Customer(Base):
     preferences: Mapped[dict | None] = mapped_column(JSONB, nullable=True, default=dict)
     tax_profile: Mapped[dict | None] = mapped_column(JSONB, nullable=True, default=dict)
     notes: Mapped[list | None] = mapped_column(JSONB, nullable=True, default=list)
+    profile_data: Mapped[dict | None] = mapped_column(JSONB, nullable=True, default=dict)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()

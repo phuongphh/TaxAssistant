@@ -219,6 +219,10 @@ export class MessageRouter {
         return { text: 'Phiên trò chuyện đã được đặt lại. Bạn có thể bắt đầu câu hỏi mới.' };
       }
 
+      // /profile is handled by the Python engine (intent classifier)
+      case '/profile':
+        return null;
+
       // /start and /help are handled by individual channel adapters
       default:
         return null;

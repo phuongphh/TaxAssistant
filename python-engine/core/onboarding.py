@@ -34,7 +34,8 @@ SERVICE_MENU = (
     "5. Dịch vụ tư vấn về thuế với các dẫn chứng từ văn bản pháp luật\n"
     "6. Tư vấn xử phạt & vi phạm thuế\n"
     "7. Hỗ trợ hoàn thuế GTGT\n"
-    "8. Quyết toán thuế năm"
+    "8. Quyết toán thuế năm\n"
+    "9. Thông tin của tôi 👤"
 )
 
 SERVICE_TYPE_MAP = {
@@ -46,6 +47,7 @@ SERVICE_TYPE_MAP = {
     "6": "penalty_consultation",
     "7": "tax_refund",
     "8": "annual_settlement",
+    "9": "profile",
 }
 
 SERVICE_TITLE_MAP = {
@@ -57,6 +59,7 @@ SERVICE_TITLE_MAP = {
     "penalty_consultation": "Tư vấn xử phạt & vi phạm thuế",
     "tax_refund": "Hoàn thuế GTGT",
     "annual_settlement": "Quyết toán thuế năm",
+    "profile": "Thông tin của tôi",
 }
 
 # Map user input to customer type

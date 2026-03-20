@@ -243,6 +243,13 @@ class TaxEngineServicer(pb2_grpc.TaxEngineServicer):
                     "onboarding_step": request.customer_profile.onboarding_step,
                     "tax_profile": dict(request.customer_profile.tax_profile),
                     "notes": [{"note": n} for n in request.customer_profile.recent_notes],
+                    "email": request.customer_profile.email,
+                    "phone": request.customer_profile.phone,
+                    "address": request.customer_profile.address,
+                    "profile_data": dict(request.customer_profile.profile_data),
+                    "username": request.customer_profile.username,
+                    "first_name": request.customer_profile.first_name,
+                    "display_name": request.customer_profile.display_name,
                 }
                 # Use customer_type from profile if available
                 if customer_profile["customer_type"] and customer_profile["customer_type"] != "unknown":
@@ -291,6 +298,7 @@ class TaxEngineServicer(pb2_grpc.TaxEngineServicer):
                     session_context=session_context,
                     conversation_history=conversation_history,
                     memory_context=memory_context,
+                    customer_profile=customer_profile,
                 )
 
             # Enforce a hard timeout so we ALWAYS return a response before
@@ -318,6 +326,19 @@ class TaxEngineServicer(pb2_grpc.TaxEngineServicer):
                     "confidence": 0.0,
                     "intent": "timeout",
                 }
+
+            # Persist profile update_fields if present (from profile edit)
+            update_fields = result.get("update_fields")
+            if update_fields and customer_profile and customer_profile.get("customer_id"):
+                try:
+                    async with async_session() as session:
+                        repo = CustomerRepository(session)
+                        cid = uuid_mod.UUID(customer_profile["customer_id"])
+                        await repo.update_profile(cid, **update_fields)
+                        await session.commit()
+                    logger.info("Profile updated: customer=%s fields=%s", customer_profile["customer_id"], list(update_fields.keys()))
+                except Exception as db_err:
+                    logger.warning("Failed to persist profile update: %s", db_err)
 
             elapsed = time.monotonic() - start
             logger.info(
@@ -712,6 +733,9 @@ class TaxEngineServicer(pb2_grpc.TaxEngineServicer):
         tax_profile = customer.tax_profile or {}
         tax_profile_str = {k: str(v) for k, v in tax_profile.items()}
 
+        profile_data = customer.profile_data or {}
+        profile_data_str = {k: str(v) for k, v in profile_data.items()}
+
         return pb2.CustomerProfileMsg(
             customer_id=str(customer.id),
             channel=customer.channel or "",
@@ -726,6 +750,10 @@ class TaxEngineServicer(pb2_grpc.TaxEngineServicer):
             onboarding_step=customer.onboarding_step or "new",
             tax_profile=tax_profile_str,
             recent_notes=recent_notes,
+            email=customer.email or "",
+            phone=customer.phone or "",
+            address=customer.address or "",
+            profile_data=profile_data_str,
         )
 
     def _case_to_proto(self, case):
