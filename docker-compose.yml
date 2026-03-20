@@ -73,14 +73,15 @@ services:
       - ENVIRONMENT=development
       - POSTGRES_URL=postgresql+asyncpg://taxapp:taxapp_dev@postgres:5432/taxassistant
       - REDIS_URL=redis://redis:6379
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
-      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
       - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.z.ai/api/paas/v4/}
       - LLM_PROVIDER=${LLM_PROVIDER:-openai_compatible}
       - LLM_MODEL=${LLM_MODEL:-glm-5}
       - CHROMA_PERSIST_DIR=/app/data/chroma
       - PORTAL_ADMIN_PASSWORD_HASH=${PORTAL_ADMIN_PASSWORD_HASH}
-
+    env_file:
+      - .env
     depends_on:
       redis:
         condition: service_healthy
