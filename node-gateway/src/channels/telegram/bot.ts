@@ -68,8 +68,13 @@ export class TelegramAdapter implements ChannelAdapter {
     });
 
     // Register message handler
-    this.bot.on('message', async (ctx: Context<Update.MessageUpdate>) => {
+    this.bot.on('message', async (ctx: Context<Update.MessageUpdate>, next) => {
       this.lastUpdateTime = Date.now();
+      // /start and /help are handled by bot.command() below — pass to next middleware
+      const text = 'text' in ctx.message ? (ctx.message as any).text?.trim() : '';
+      if (text === '/start' || text === '/help') {
+        return next();
+      }
       try {
         const message = mapTelegramMessage(ctx);
         if (message && this.messageHandler) {
