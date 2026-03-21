@@ -53,6 +53,11 @@ export class MessageRouter {
       textPreview: message.text?.slice(0, 80),
     });
 
+    // /start and /help are handled by channel adapters — skip entire pipeline
+    if (message.text === '/start' || message.text === '/help') {
+      return;
+    }
+
     try {
       // 1. Resolve session
       const session = await this.sessionManager.resolveSession(
