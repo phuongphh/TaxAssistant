@@ -3,6 +3,7 @@ import { Telegraf, Context } from 'telegraf';
 import { Update } from 'telegraf/types';
 import { config } from '../../config';
 import { logger } from '../../utils/logger';
+import { markdownToHtml } from '../../utils/formatter';
 import {
   ChannelAdapter,
   IncomingMessage,
@@ -256,15 +257,16 @@ export class TelegramAdapter implements ChannelAdapter {
           ? { reply_markup: { inline_keyboard: keyboard } }
           : {};
 
+        const htmlChunk = markdownToHtml(chunks[i]);
+
         try {
-          // Try HTML parse mode first for nice formatting
-          await this.bot.telegram.sendMessage(telegramChatId, chunks[i], {
+          // Send with HTML parse mode after markdown→HTML conversion
+          await this.bot.telegram.sendMessage(telegramChatId, htmlChunk, {
             parse_mode: 'HTML',
             ...replyMarkup,
           });
         } catch (htmlError: any) {
-          // If HTML parsing fails (LLM response contains <, >, & etc.),
-          // fall back to plain text
+          // If HTML parsing still fails, fall back to plain text
           if (htmlError?.message?.includes("can't parse entities")) {
             logger.warn('Telegram HTML parse failed, falling back to plain text', {
               chatId,
@@ -368,13 +370,15 @@ export class TelegramAdapter implements ChannelAdapter {
             ? { reply_markup: { inline_keyboard: keyboard } }
             : {};
 
+          const finalHtml = markdownToHtml(finalText);
+
           try {
             await bot.telegram.editMessageText(
               telegramChatId,
               messageId,
               undefined,
-              finalText,
-              replyMarkup,
+              finalHtml,
+              { parse_mode: 'HTML', ...replyMarkup },
             );
           } catch (editErr: any) {
             if (!editErr?.message?.includes('message is not modified')) {
