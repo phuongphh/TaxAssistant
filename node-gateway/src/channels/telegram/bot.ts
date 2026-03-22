@@ -221,15 +221,29 @@ export class TelegramAdapter implements ChannelAdapter {
   }
 
   private setupPollingWatchdog(): void {
-    // Watchdog: restart polling if no updates for 10 minutes.
-    // Threshold is generous to avoid unnecessary restarts when the bot
-    // simply has no incoming messages (previously 2 min — too aggressive,
-    // caused burst API calls every 60s that interfered with other bots).
+    // Watchdog: only restart polling if Telegram API itself is unreachable,
+    // NOT just because there are no incoming messages (idle bot is healthy bot).
+    // Using getMe() as a real connectivity probe avoids spurious 409 Conflicts
+    // that occur when stop()+launch() race with Telegram's open long-poll connection.
     this.watchdogTimer = setInterval(async () => {
       if (!this.isPollingHealthy(600_000)) {
+        // Probe Telegram API to confirm connectivity before restarting.
+        try {
+          await this.bot.telegram.getMe();
+          // API reachable — bot is idle but polling is fine, reset the timer.
+          this.lastUpdateTime = Date.now();
+          return;
+        } catch {
+          // Cannot reach Telegram — polling is genuinely broken, restart needed.
+        }
+
         logger.warn('Telegram polling watchdog: no updates for 10 min, restarting polling');
         try {
           this.bot.stop('SIGTERM');
+          // Wait for Telegram to close the existing long-poll connection before
+          // opening a new one. Without this delay the new getUpdates call races
+          // with the old one and Telegram returns a 409 Conflict, killing polling.
+          await new Promise((r) => setTimeout(r, 5000));
           await this.bot.telegram.deleteWebhook({ drop_pending_updates: false });
           this.bot.launch({ dropPendingUpdates: false });
           this.lastUpdateTime = Date.now();
