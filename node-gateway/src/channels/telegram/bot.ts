@@ -67,14 +67,53 @@ export class TelegramAdapter implements ChannelAdapter {
       logger.error('Telegraf caught error', { error: err });
     });
 
-    // Register message handler
-    this.bot.on('message', async (ctx: Context<Update.MessageUpdate>, next) => {
-      this.lastUpdateTime = Date.now();
-      // /start and /help are handled by bot.command() below — pass to next middleware
-      const text = 'text' in ctx.message ? (ctx.message as any).text?.trim() : '';
-      if (text === '/start' || text === '/help') {
-        return next();
+    // ── Bot commands ──────────────────────────────────────────────────────
+    // MUST be registered BEFORE on('message'). Telegraf processes middleware
+    // in registration order: the command filter matches and consumes the
+    // update, so on('message') never fires for these commands.
+    // Previously they were registered after on('message'), which caused
+    // the command handlers to be silently skipped.
+
+    this.bot.command('start', async (ctx) => {
+      try {
+        await ctx.reply(
+          'Xin chào! Tôi là Trợ lý Thuế ảo. 🇻🇳\n\n' +
+          'Tôi có thể hỗ trợ bạn các dịch vụ:\n' +
+          '1. Tính thuế (GTGT, TNDN, TNCN, Môn bài)\n' +
+          '2. Hướng dẫn kê khai & quyết toán thuế\n' +
+          '3. Đăng ký mã số thuế\n' +
+          '4. Kiểm tra hóa đơn, chứng từ\n' +
+          '5. Dịch vụ tư vấn về thuế với các dẫn chứng từ văn bản pháp luật\n' +
+          '6. Tư vấn xử phạt & vi phạm thuế\n' +
+          '7. Hỗ trợ hoàn thuế GTGT\n' +
+          '8. Quyết toán thuế năm\n\n' +
+          'Hãy gửi câu hỏi của bạn hoặc chọn số dịch vụ để bắt đầu!',
+        );
+        logger.info('/start command processed', { userId: ctx.from?.id, chatId: ctx.chat?.id });
+      } catch (error) {
+        logger.error('Failed to process /start command', { error, userId: ctx.from?.id });
+        try {
+          await ctx.reply('Xin lỗi, có lỗi xảy ra khi xử lý lệnh /start. Vui lòng thử lại sau.');
+        } catch { /* ignore */ }
       }
+    });
+
+    this.bot.command('help', async (ctx) => {
+      await ctx.reply(
+        'Các lệnh hỗ trợ:\n' +
+        '/start - Bắt đầu cuộc trò chuyện\n' +
+        '/help - Hiển thị trợ giúp\n' +
+        '/loai <SME|hogiadia|cathe> - Đặt loại khách hàng\n' +
+        '/reset - Đặt lại phiên trò chuyện\n\n' +
+        'Hoặc bạn có thể gửi trực tiếp câu hỏi về thuế.',
+      );
+    });
+
+    // ── Generic message handler ────────────────────────────────────────────
+    // Catch-all for all non-command messages. Registered AFTER command
+    // handlers so commands are consumed first and never reach here.
+    this.bot.on('message', async (ctx: Context<Update.MessageUpdate>) => {
+      this.lastUpdateTime = Date.now();
       try {
         const message = mapTelegramMessage(ctx);
         if (message && this.messageHandler) {
@@ -85,11 +124,10 @@ export class TelegramAdapter implements ChannelAdapter {
       }
     });
 
-    // Handle inline keyboard button clicks (callback_query)
+    // ── Inline keyboard button clicks ─────────────────────────────────────
     this.bot.on('callback_query', async (ctx) => {
       this.lastUpdateTime = Date.now();
       try {
-        // Acknowledge the callback to remove loading state on the button
         await ctx.answerCbQuery();
 
         const cbQuery = ctx.callbackQuery;
@@ -123,52 +161,6 @@ export class TelegramAdapter implements ChannelAdapter {
       } catch (error) {
         logger.error('Error processing Telegram callback query', { error });
       }
-    });
-
-    // Bot commands
-    this.bot.command('start', async (ctx) => {
-      try {
-        await ctx.reply(
-          'Xin chào! Tôi là Trợ lý Thuế ảo. 🇻🇳\n\n' +
-          'Tôi có thể hỗ trợ bạn các dịch vụ:\n' +
-          '1. Tính thuế (GTGT, TNDN, TNCN, Môn bài)\n' +
-          '2. Hướng dẫn kê khai & quyết toán thuế\n' +
-          '3. Đăng ký mã số thuế\n' +
-          '4. Kiểm tra hóa đơn, chứng từ\n' +
-          '5. Dịch vụ tư vấn về thuế với các dẫn chứng từ văn bản pháp luật\n' +
-          '6. Tư vấn xử phạt & vi phạm thuế\n' +
-          '7. Hỗ trợ hoàn thuế GTGT\n' +
-          '8. Quyết toán thuế năm\n\n' +
-          'Hãy gửi câu hỏi của bạn hoặc chọn số dịch vụ để bắt đầu!',
-        );
-        logger.info('/start command processed successfully', {
-          userId: ctx.from?.id,
-          chatId: ctx.chat?.id
-        });
-      } catch (error) {
-        logger.error('Failed to process /start command', {
-          error,
-          userId: ctx.from?.id,
-          chatId: ctx.chat?.id
-        });
-        // Try to send error message to user
-        try {
-          await ctx.reply('Xin lỗi, có lỗi xảy ra khi xử lý lệnh /start. Vui lòng thử lại sau.');
-        } catch {
-          // Ignore if we can't send error message
-        }
-      }
-    });
-
-    this.bot.command('help', async (ctx) => {
-      await ctx.reply(
-        'Các lệnh hỗ trợ:\n' +
-        '/start - Bắt đầu cuộc trò chuyện\n' +
-        '/help - Hiển thị trợ giúp\n' +
-        '/loai <SME|hogiadia|cathe> - Đặt loại khách hàng\n' +
-        '/reset - Đặt lại phiên trò chuyện\n\n' +
-        'Hoặc bạn có thể gửi trực tiếp câu hỏi về thuế.',
-      );
     });
 
     // Setup webhook or polling.

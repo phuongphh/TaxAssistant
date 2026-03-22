@@ -93,16 +93,18 @@ export class TaxEngineClient {
   }
 
   /**
-   * Send a tax-related message for processing
+   * Build the gRPC ProcessMessage request payload.
+   * Shared by both processMessage (unary) and processMessageStream (server-streaming)
+   * to avoid duplication and ensure both RPCs stay in sync.
    */
-  async processMessage(
+  private buildProcessMessageRequest(
     requestId: string,
     message: string,
     session: SessionData,
     customerProfile?: CustomerProfile,
     activeCases?: ActiveCase[],
     conversationSummaries?: string[],
-  ): Promise<TaxEngineResponse> {
+  ): Record<string, unknown> {
     // Send the last 10 conversation entries (5 turns) so the LLM has
     // enough context to remember earlier information like customer type.
     const recentHistory = (session.conversationHistory || []).slice(-10).map((entry) => ({
@@ -125,7 +127,6 @@ export class TaxEngineClient {
       conversationHistory: recentHistory,
     };
 
-    // Attach customer profile for long-term memory
     if (customerProfile) {
       request.customerProfile = {
         customerId: customerProfile.customerId,
@@ -148,7 +149,6 @@ export class TaxEngineClient {
       };
     }
 
-    // Attach active support cases
     if (activeCases?.length) {
       request.activeCases = activeCases.map((c) => ({
         caseId: c.caseId,
@@ -160,7 +160,6 @@ export class TaxEngineClient {
       }));
     }
 
-    // Attach conversation summaries from long-term memory
     if (conversationSummaries?.length) {
       request.conversationSummaries = conversationSummaries;
     }
@@ -170,6 +169,24 @@ export class TaxEngineClient {
       customerProfile ? 'yes' : 'no',
       activeCases?.length ?? 0,
       session.sessionId,
+    );
+
+    return request;
+  }
+
+  /**
+   * Send a tax-related message for processing (unary RPC).
+   */
+  async processMessage(
+    requestId: string,
+    message: string,
+    session: SessionData,
+    customerProfile?: CustomerProfile,
+    activeCases?: ActiveCase[],
+    conversationSummaries?: string[],
+  ): Promise<TaxEngineResponse> {
+    const request = this.buildProcessMessageRequest(
+      requestId, message, session, customerProfile, activeCases, conversationSummaries,
     );
 
     const startMs = Date.now();
@@ -198,7 +215,7 @@ export class TaxEngineClient {
   }
 
   /**
-   * Stream a tax-related message for progressive response.
+   * Stream a tax-related message for progressive response (server-streaming RPC).
    * Calls onChunk for each token/chunk as it arrives from the LLM.
    * Returns the fully assembled TaxEngineResponse when done.
    */
@@ -211,62 +228,9 @@ export class TaxEngineClient {
     activeCases?: ActiveCase[],
     conversationSummaries?: string[],
   ): Promise<TaxEngineResponse> {
-    const recentHistory = (session.conversationHistory || []).slice(-10).map((entry) => ({
-      role: entry.role,
-      content: entry.content,
-      timestamp: entry.timestamp,
-    }));
-
-    const request: Record<string, unknown> = {
-      requestId,
-      message,
-      language: 'vi',
-      context: {
-        sessionId: session.sessionId,
-        userId: session.userId,
-        customerType: mapCustomerType(session.customerType),
-        previousTopics: [],
-        metadata: session.context as Record<string, string>,
-      },
-      conversationHistory: recentHistory,
-    };
-
-    if (customerProfile) {
-      request.customerProfile = {
-        customerId: customerProfile.customerId,
-        channel: customerProfile.channel,
-        channelUserId: customerProfile.channelUserId,
-        username: customerProfile.username || '',
-        firstName: customerProfile.firstName || '',
-        lastName: customerProfile.lastName || '',
-        displayName: customerProfile.displayName || '',
-        customerType: customerProfile.customerType,
-        businessName: customerProfile.businessName,
-        taxCode: customerProfile.taxCode,
-        industry: customerProfile.industry,
-        province: customerProfile.province,
-        annualRevenueRange: customerProfile.annualRevenueRange,
-        employeeCountRange: customerProfile.employeeCountRange,
-        onboardingStep: customerProfile.onboardingStep,
-        taxProfile: customerProfile.taxProfile || {},
-        recentNotes: customerProfile.recentNotes || [],
-      };
-    }
-
-    if (activeCases?.length) {
-      request.activeCases = activeCases.map((c) => ({
-        caseId: c.caseId,
-        customerId: c.customerId,
-        serviceType: c.serviceType,
-        title: c.title,
-        status: c.status,
-        currentStep: c.currentStep,
-      }));
-    }
-
-    if (conversationSummaries?.length) {
-      request.conversationSummaries = conversationSummaries;
-    }
+    const request = this.buildProcessMessageRequest(
+      requestId, message, session, customerProfile, activeCases, conversationSummaries,
+    );
 
     const startMs = Date.now();
     return new Promise((resolve, reject) => {
