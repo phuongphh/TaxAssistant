@@ -174,6 +174,65 @@ export class TelegramAdapter implements ChannelAdapter {
       }
     });
 
+    // Bot commands
+    this.bot.command('start', async (ctx) => {
+      try {
+        const firstName = ctx.from?.first_name;
+        const lastName = ctx.from?.last_name;
+        const userName =
+          [firstName, lastName].filter(Boolean).join(' ') ||
+          ctx.from?.username ||
+          'bạn';
+
+        const homepage = getHomepageTemplate(userName);
+
+        await ctx.reply(homepage, {
+          parse_mode: 'HTML',
+          reply_markup: {
+            inline_keyboard: [
+              [
+                { text: 'Tính thuế', callback_data: 'Tính thuế' },
+                { text: 'Tra cứu quy định', callback_data: 'Tra cứu quy định' },
+                { text: 'Hướng dẫn kê khai', callback_data: 'Hướng dẫn kê khai' },
+              ],
+              [
+                { text: 'Hỗ trợ SME', callback_data: 'Hỗ trợ SME' },
+                { text: 'Câu hỏi mẫu', callback_data: 'Câu hỏi mẫu' },
+              ],
+            ],
+          },
+        });
+        logger.info('/start command processed successfully', {
+          userId: ctx.from?.id,
+          chatId: ctx.chat?.id,
+        });
+      } catch (error) {
+        logger.error('Failed to process /start command', {
+          error,
+          userId: ctx.from?.id,
+          chatId: ctx.chat?.id,
+        });
+        // Try to send error message to user
+        try {
+          await ctx.reply('Xin lỗi, có lỗi xảy ra khi xử lý lệnh /start. Vui lòng thử lại sau.');
+        } catch {
+          // Ignore if we can't send error message
+        }
+      }
+    });
+
+    this.bot.command('help', async (ctx) => {
+      await ctx.reply(
+        'Các lệnh hỗ trợ:\n' +
+        '/start - Bắt đầu cuộc trò chuyện\n' +
+        '/help - Hiển thị trợ giúp\n' +
+        '/loai <SME|hogiadia|cathe> - Đặt loại khách hàng\n' +
+        '/reset - Đặt lại phiên trò chuyện\n\n' +
+        'Hoặc bạn có thể gửi trực tiếp câu hỏi về thuế.',
+      );
+    });
+
+
     // Setup webhook or polling.
     // Prefer webhook when TELEGRAM_WEBHOOK_URL is set (any environment).
     // Webhook is push-based → no long-polling, no watchdog, no burst API
