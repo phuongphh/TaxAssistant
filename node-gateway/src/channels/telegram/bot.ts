@@ -68,7 +68,51 @@ export class TelegramAdapter implements ChannelAdapter {
       logger.error('Telegraf caught error', { error: err });
     });
 
-    // Register message handler
+    // ── Bot commands ──────────────────────────────────────────────────────
+    // MUST be registered BEFORE on('message'). Telegraf processes middleware
+    // in registration order: the command filter matches and consumes the
+    // update, so on('message') never fires for these commands.
+    // Previously they were registered after on('message'), which caused
+    // the command handlers to be silently skipped.
+
+    this.bot.command('start', async (ctx) => {
+      try {
+        await ctx.reply(
+          'Xin chào! Tôi là Trợ lý Thuế ảo. 🇻🇳\n\n' +
+          'Tôi có thể hỗ trợ bạn các dịch vụ:\n' +
+          '1. Tính thuế (GTGT, TNDN, TNCN, Môn bài)\n' +
+          '2. Hướng dẫn kê khai & quyết toán thuế\n' +
+          '3. Đăng ký mã số thuế\n' +
+          '4. Kiểm tra hóa đơn, chứng từ\n' +
+          '5. Dịch vụ tư vấn về thuế với các dẫn chứng từ văn bản pháp luật\n' +
+          '6. Tư vấn xử phạt & vi phạm thuế\n' +
+          '7. Hỗ trợ hoàn thuế GTGT\n' +
+          '8. Quyết toán thuế năm\n\n' +
+          'Hãy gửi câu hỏi của bạn hoặc chọn số dịch vụ để bắt đầu!',
+        );
+        logger.info('/start command processed', { userId: ctx.from?.id, chatId: ctx.chat?.id });
+      } catch (error) {
+        logger.error('Failed to process /start command', { error, userId: ctx.from?.id });
+        try {
+          await ctx.reply('Xin lỗi, có lỗi xảy ra khi xử lý lệnh /start. Vui lòng thử lại sau.');
+        } catch { /* ignore */ }
+      }
+    });
+
+    this.bot.command('help', async (ctx) => {
+      await ctx.reply(
+        'Các lệnh hỗ trợ:\n' +
+        '/start - Bắt đầu cuộc trò chuyện\n' +
+        '/help - Hiển thị trợ giúp\n' +
+        '/loai <SME|hogiadia|cathe> - Đặt loại khách hàng\n' +
+        '/reset - Đặt lại phiên trò chuyện\n\n' +
+        'Hoặc bạn có thể gửi trực tiếp câu hỏi về thuế.',
+      );
+    });
+
+    // ── Generic message handler ────────────────────────────────────────────
+    // Catch-all for all non-command messages. Registered AFTER command
+    // handlers so commands are consumed first and never reach here.
     this.bot.on('message', async (ctx: Context<Update.MessageUpdate>) => {
       this.lastUpdateTime = Date.now();
       try {
@@ -81,11 +125,10 @@ export class TelegramAdapter implements ChannelAdapter {
       }
     });
 
-    // Handle inline keyboard button clicks (callback_query)
+    // ── Inline keyboard button clicks ─────────────────────────────────────
     this.bot.on('callback_query', async (ctx) => {
       this.lastUpdateTime = Date.now();
       try {
-        // Acknowledge the callback to remove loading state on the button
         await ctx.answerCbQuery();
 
         const cbQuery = ctx.callbackQuery;
@@ -179,6 +222,7 @@ export class TelegramAdapter implements ChannelAdapter {
       );
     });
 
+
     // Setup webhook or polling.
     // Prefer webhook when TELEGRAM_WEBHOOK_URL is set (any environment).
     // Webhook is push-based → no long-polling, no watchdog, no burst API
@@ -205,7 +249,7 @@ export class TelegramAdapter implements ChannelAdapter {
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       try {
         await this.bot.telegram.deleteWebhook({ drop_pending_updates: false });
-        await this.bot.launch({ dropPendingUpdates: false });
+        this.bot.launch({ dropPendingUpdates: false });
         logger.info('Telegram bot started in polling mode');
         this.setupPollingWatchdog();
         return;
@@ -229,17 +273,31 @@ export class TelegramAdapter implements ChannelAdapter {
   }
 
   private setupPollingWatchdog(): void {
-    // Watchdog: restart polling if no updates for 10 minutes.
-    // Threshold is generous to avoid unnecessary restarts when the bot
-    // simply has no incoming messages (previously 2 min — too aggressive,
-    // caused burst API calls every 60s that interfered with other bots).
+    // Watchdog: only restart polling if Telegram API itself is unreachable,
+    // NOT just because there are no incoming messages (idle bot is healthy bot).
+    // Using getMe() as a real connectivity probe avoids spurious 409 Conflicts
+    // that occur when stop()+launch() race with Telegram's open long-poll connection.
     this.watchdogTimer = setInterval(async () => {
       if (!this.isPollingHealthy(600_000)) {
+        // Probe Telegram API to confirm connectivity before restarting.
+        try {
+          await this.bot.telegram.getMe();
+          // API reachable — bot is idle but polling is fine, reset the timer.
+          this.lastUpdateTime = Date.now();
+          return;
+        } catch {
+          // Cannot reach Telegram — polling is genuinely broken, restart needed.
+        }
+
         logger.warn('Telegram polling watchdog: no updates for 10 min, restarting polling');
         try {
           this.bot.stop('SIGTERM');
+          // Wait for Telegram to close the existing long-poll connection before
+          // opening a new one. Without this delay the new getUpdates call races
+          // with the old one and Telegram returns a 409 Conflict, killing polling.
+          await new Promise((r) => setTimeout(r, 5000));
           await this.bot.telegram.deleteWebhook({ drop_pending_updates: false });
-          await this.bot.launch({ dropPendingUpdates: false });
+          this.bot.launch({ dropPendingUpdates: false });
           this.lastUpdateTime = Date.now();
           logger.info('Telegram polling restarted by watchdog');
         } catch (err) {
