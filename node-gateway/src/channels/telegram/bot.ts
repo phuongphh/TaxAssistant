@@ -72,24 +72,34 @@ export class TelegramAdapter implements ChannelAdapter {
     // MUST be registered BEFORE on('message'). Telegraf processes middleware
     // in registration order: the command filter matches and consumes the
     // update, so on('message') never fires for these commands.
-    // Previously they were registered after on('message'), which caused
-    // the command handlers to be silently skipped.
 
     this.bot.command('start', async (ctx) => {
       try {
-        await ctx.reply(
-          'Xin chào! Tôi là Trợ lý Thuế ảo. 🇻🇳\n\n' +
-          'Tôi có thể hỗ trợ bạn các dịch vụ:\n' +
-          '1. Tính thuế (GTGT, TNDN, TNCN, Môn bài)\n' +
-          '2. Hướng dẫn kê khai & quyết toán thuế\n' +
-          '3. Đăng ký mã số thuế\n' +
-          '4. Kiểm tra hóa đơn, chứng từ\n' +
-          '5. Dịch vụ tư vấn về thuế với các dẫn chứng từ văn bản pháp luật\n' +
-          '6. Tư vấn xử phạt & vi phạm thuế\n' +
-          '7. Hỗ trợ hoàn thuế GTGT\n' +
-          '8. Quyết toán thuế năm\n\n' +
-          'Hãy gửi câu hỏi của bạn hoặc chọn số dịch vụ để bắt đầu!',
-        );
+        const firstName = ctx.from?.first_name;
+        const lastName = ctx.from?.last_name;
+        const userName =
+          [firstName, lastName].filter(Boolean).join(' ') ||
+          ctx.from?.username ||
+          'bạn';
+
+        const homepage = getHomepageTemplate(userName);
+
+        await ctx.reply(homepage, {
+          parse_mode: 'HTML',
+          reply_markup: {
+            inline_keyboard: [
+              [
+                { text: 'Tính thuế', callback_data: 'Tính thuế' },
+                { text: 'Tra cứu quy định', callback_data: 'Tra cứu quy định' },
+                { text: 'Hướng dẫn kê khai', callback_data: 'Hướng dẫn kê khai' },
+              ],
+              [
+                { text: 'Hỗ trợ SME', callback_data: 'Hỗ trợ SME' },
+                { text: 'Câu hỏi mẫu', callback_data: 'Câu hỏi mẫu' },
+              ],
+            ],
+          },
+        });
         logger.info('/start command processed', { userId: ctx.from?.id, chatId: ctx.chat?.id });
       } catch (error) {
         logger.error('Failed to process /start command', { error, userId: ctx.from?.id });
@@ -163,65 +173,6 @@ export class TelegramAdapter implements ChannelAdapter {
         logger.error('Error processing Telegram callback query', { error });
       }
     });
-
-    // Bot commands
-    this.bot.command('start', async (ctx) => {
-      try {
-        const firstName = ctx.from?.first_name;
-        const lastName = ctx.from?.last_name;
-        const userName =
-          [firstName, lastName].filter(Boolean).join(' ') ||
-          ctx.from?.username ||
-          'bạn';
-
-        const homepage = getHomepageTemplate(userName);
-
-        await ctx.reply(homepage, {
-          parse_mode: 'HTML',
-          reply_markup: {
-            inline_keyboard: [
-              [
-                { text: 'Tính thuế', callback_data: 'Tính thuế' },
-                { text: 'Tra cứu quy định', callback_data: 'Tra cứu quy định' },
-                { text: 'Hướng dẫn kê khai', callback_data: 'Hướng dẫn kê khai' },
-              ],
-              [
-                { text: 'Hỗ trợ SME', callback_data: 'Hỗ trợ SME' },
-                { text: 'Câu hỏi mẫu', callback_data: 'Câu hỏi mẫu' },
-              ],
-            ],
-          },
-        });
-        logger.info('/start command processed successfully', {
-          userId: ctx.from?.id,
-          chatId: ctx.chat?.id,
-        });
-      } catch (error) {
-        logger.error('Failed to process /start command', {
-          error,
-          userId: ctx.from?.id,
-          chatId: ctx.chat?.id,
-        });
-        // Try to send error message to user
-        try {
-          await ctx.reply('Xin lỗi, có lỗi xảy ra khi xử lý lệnh /start. Vui lòng thử lại sau.');
-        } catch {
-          // Ignore if we can't send error message
-        }
-      }
-    });
-
-    this.bot.command('help', async (ctx) => {
-      await ctx.reply(
-        'Các lệnh hỗ trợ:\n' +
-        '/start - Bắt đầu cuộc trò chuyện\n' +
-        '/help - Hiển thị trợ giúp\n' +
-        '/loai <SME|hogiadia|cathe> - Đặt loại khách hàng\n' +
-        '/reset - Đặt lại phiên trò chuyện\n\n' +
-        'Hoặc bạn có thể gửi trực tiếp câu hỏi về thuế.',
-      );
-    });
-
 
     // Setup webhook or polling.
     // Prefer webhook when TELEGRAM_WEBHOOK_URL is set (any environment).

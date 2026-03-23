@@ -92,4 +92,41 @@ describe('markdownToHtml', () => {
     const input = '`a < b && c > d`';
     expect(markdownToHtml(input)).toBe('<code>a &lt; b &amp;&amp; c &gt; d</code>');
   });
+
+  // --- Markdown tables ---
+  it('converts markdown table rows to dash-separated text', () => {
+    const input = [
+      '| Lĩnh vực | Nội dung |',
+      '|----------|----------|',
+      '| Thuế TNCN | Tính thuế |',
+      '| Thuế GTGT | Kê khai |',
+    ].join('\n');
+
+    const expected = [
+      'Lĩnh vực — Nội dung',
+      'Thuế TNCN — Tính thuế',
+      'Thuế GTGT — Kê khai',
+    ].join('\n');
+
+    expect(markdownToHtml(input)).toBe(expected);
+  });
+
+  it('strips table separator lines', () => {
+    const input = '| A | B |\n|---|---|\n| 1 | 2 |';
+    expect(markdownToHtml(input)).toBe('A — B\n1 — 2');
+  });
+
+  // --- Blockquotes ---
+  it('removes > blockquote prefix', () => {
+    expect(markdownToHtml('> Trích dẫn')).toBe('Trích dẫn');
+  });
+
+  it('removes > from multiple blockquote lines', () => {
+    const input = '> Dòng 1\n> Dòng 2';
+    expect(markdownToHtml(input)).toBe('Dòng 1\nDòng 2');
+  });
+
+  it('handles > with no space after it', () => {
+    expect(markdownToHtml('>Trích dẫn')).toBe('Trích dẫn');
+  });
 });
