@@ -93,8 +93,8 @@ describe('markdownToHtml', () => {
     expect(markdownToHtml(input)).toBe('<code>a &lt; b &amp;&amp; c &gt; d</code>');
   });
 
-  // --- Markdown tables ---
-  it('converts markdown table rows to dash-separated text', () => {
+  // --- Markdown tables (mobile-friendly card layout) ---
+  it('converts 2-column table to bold label: value cards', () => {
     const input = [
       '| Lĩnh vực | Nội dung |',
       '|----------|----------|',
@@ -103,9 +103,29 @@ describe('markdownToHtml', () => {
     ].join('\n');
 
     const expected = [
-      'Lĩnh vực — Nội dung',
-      'Thuế TNCN — Tính thuế',
-      'Thuế GTGT — Kê khai',
+      '<b>Thuế TNCN</b>: Tính thuế',
+      '<b>Thuế GTGT</b>: Kê khai',
+    ].join('\n');
+
+    expect(markdownToHtml(input)).toBe(expected);
+  });
+
+  it('converts 3-column table to vertical cards with header labels', () => {
+    const input = [
+      '| Loại | Thuế suất | Áp dụng |',
+      '|------|-----------|---------|',
+      '| GTGT | 10% | Hàng hóa |',
+      '| TNDN | 20% | Lợi nhuận |',
+    ].join('\n');
+
+    const expected = [
+      '<b>GTGT</b>',
+      'Thuế suất: 10%',
+      'Áp dụng: Hàng hóa',
+      '',
+      '<b>TNDN</b>',
+      'Thuế suất: 20%',
+      'Áp dụng: Lợi nhuận',
     ].join('\n');
 
     expect(markdownToHtml(input)).toBe(expected);
@@ -113,7 +133,52 @@ describe('markdownToHtml', () => {
 
   it('strips table separator lines', () => {
     const input = '| A | B |\n|---|---|\n| 1 | 2 |';
-    expect(markdownToHtml(input)).toBe('A — B\n1 — 2');
+    expect(markdownToHtml(input)).toBe('<b>1</b>: 2');
+  });
+
+  it('handles table with bold markdown in cells', () => {
+    const input = [
+      '| Loại | Mô tả |',
+      '|------|-------|',
+      '| **Thuế TNCN** | Tính thuế cá nhân |',
+    ].join('\n');
+
+    // ** in cell gets converted by the bold step
+    const result = markdownToHtml(input);
+    expect(result).toContain('Thuế TNCN');
+    expect(result).toContain('Tính thuế cá nhân');
+    expect(result).not.toContain('|');
+  });
+
+  it('handles header-only table (no data rows)', () => {
+    const input = '| A | B |\n|---|---|';
+    expect(markdownToHtml(input)).toBe('<b>A — B</b>');
+  });
+
+  it('preserves text around tables', () => {
+    const input = 'Trước bảng\n| A | B |\n|---|---|\n| 1 | 2 |\nSau bảng';
+    const result = markdownToHtml(input);
+    expect(result).toContain('Trước bảng');
+    expect(result).toContain('Sau bảng');
+    expect(result).not.toContain('|');
+  });
+
+  it('renders the screenshot table as mobile-friendly cards', () => {
+    const input = [
+      '| Lĩnh vực | Nội dung |',
+      '|----------|----------|',
+      '| 💰 **Thuế TNCN** | Tính thuế, giảm trừ gia cảnh |',
+      '| 📊 **Thuế GTGT** | Kê khai, khấu trừ, hoàn thuế |',
+      '| 🏢 **Thuế TNDN** | Chi phí được trừ, lợi nhuận |',
+    ].join('\n');
+
+    const result = markdownToHtml(input);
+    // Should have bold labels and values, no pipe characters
+    expect(result).toContain('Thuế TNCN');
+    expect(result).toContain('Tính thuế, giảm trừ gia cảnh');
+    expect(result).toContain('Thuế GTGT');
+    expect(result).not.toContain('|');
+    expect(result).not.toContain('---');
   });
 
   // --- Blockquotes ---
@@ -152,9 +217,14 @@ describe('stripMarkdown', () => {
     expect(stripMarkdown('> Trích dẫn')).toBe('Trích dẫn');
   });
 
-  it('converts markdown tables to dash-separated text', () => {
-    const input = '| A | B |\n|---|---|\n| 1 | 2 |';
-    expect(stripMarkdown(input)).toBe('A — B\n1 — 2');
+  it('converts 2-column table to label: value', () => {
+    const input = '| A | B |\n|---|---|\n| X | Y |';
+    expect(stripMarkdown(input)).toBe('X: Y');
+  });
+
+  it('converts 3-column table to vertical card', () => {
+    const input = '| Name | Rate | Note |\n|---|---|---|\n| VAT | 10% | goods |';
+    expect(stripMarkdown(input)).toBe('VAT\nRate: 10%\nNote: goods');
   });
 
   it('does not produce HTML tags', () => {
