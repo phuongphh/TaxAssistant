@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { markdownToHtml } from './formatter';
+import { markdownToHtml, stripMarkdown } from './formatter';
 
 describe('markdownToHtml', () => {
   // --- HTML escaping ---
@@ -128,5 +128,45 @@ describe('markdownToHtml', () => {
 
   it('handles > with no space after it', () => {
     expect(markdownToHtml('>Trích dẫn')).toBe('Trích dẫn');
+  });
+});
+
+describe('stripMarkdown', () => {
+  it('strips **bold** markers', () => {
+    expect(stripMarkdown('Hello **world**')).toBe('Hello world');
+  });
+
+  it('strips *italic* markers', () => {
+    expect(stripMarkdown('Hello *world*')).toBe('Hello world');
+  });
+
+  it('strips `inline code` markers', () => {
+    expect(stripMarkdown('Use `npm install`')).toBe('Use npm install');
+  });
+
+  it('strips # headers to plain text', () => {
+    expect(stripMarkdown('## Tiêu đề')).toBe('Tiêu đề');
+  });
+
+  it('strips > blockquote prefix', () => {
+    expect(stripMarkdown('> Trích dẫn')).toBe('Trích dẫn');
+  });
+
+  it('converts markdown tables to dash-separated text', () => {
+    const input = '| A | B |\n|---|---|\n| 1 | 2 |';
+    expect(stripMarkdown(input)).toBe('A — B\n1 — 2');
+  });
+
+  it('does not produce HTML tags', () => {
+    const input = '**bold** and *italic* and `code`';
+    const result = stripMarkdown(input);
+    expect(result).not.toContain('<');
+    expect(result).not.toContain('>');
+    expect(result).toBe('bold and italic and code');
+  });
+
+  it('strips fenced code blocks', () => {
+    const input = '```js\nconst x = 1;\n```';
+    expect(stripMarkdown(input)).toBe('const x = 1;\n');
   });
 });

@@ -3,7 +3,7 @@ import { Telegraf, Context } from 'telegraf';
 import { Update } from 'telegraf/types';
 import { config } from '../../config';
 import { logger } from '../../utils/logger';
-import { markdownToHtml } from '../../utils/formatter';
+import { markdownToHtml, stripMarkdown } from '../../utils/formatter';
 import { getHomepageTemplate } from '../../services/templateService';
 import {
   ChannelAdapter,
@@ -295,7 +295,7 @@ export class TelegramAdapter implements ChannelAdapter {
               chunkIndex: i,
               error: htmlError.message,
             });
-            await this.bot.telegram.sendMessage(telegramChatId, chunks[i], {
+            await this.bot.telegram.sendMessage(telegramChatId, stripMarkdown(chunks[i]), {
               ...replyMarkup,
             });
           } else {
@@ -346,11 +346,13 @@ export class TelegramAdapter implements ChannelAdapter {
         pendingUpdate = null;
         if (!accumulated) return;
         try {
+          const progressHtml = markdownToHtml(accumulated + ' ▍');
           await this.bot.telegram.editMessageText(
             telegramChatId,
             messageId,
             undefined,
-            accumulated + ' ▍',  // blinking cursor effect
+            progressHtml,
+            { parse_mode: 'HTML' },
           );
         } catch (editErr: any) {
           // "message is not modified" is harmless (same content)

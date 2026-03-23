@@ -63,6 +63,36 @@ function convertMarkdownTables(text: string): string {
  * 6. Markdown headers      (# ...)
  * 7. Blockquotes           (> ...)
  */
+/**
+ * Strip markdown syntax to produce clean plain text (no HTML tags).
+ * Used as a last-resort fallback when Telegram rejects our HTML.
+ */
+export function stripMarkdown(text: string): string {
+  if (!text) return text;
+
+  let result = convertMarkdownTables(text);
+
+  // Fenced code blocks → just the code
+  result = result.replace(/```(?:\w*)\n?([\s\S]*?)```/g, '$1');
+
+  // Inline code → just the text
+  result = result.replace(/`([^`]+)`/g, '$1');
+
+  // Bold → just the text
+  result = result.replace(/\*\*(.+?)\*\*/g, '$1');
+
+  // Italic → just the text
+  result = result.replace(/\*(.+?)\*/g, '$1');
+
+  // Headers → just the text
+  result = result.replace(/^#{1,6}\s+(.+)$/gm, '$1');
+
+  // Blockquotes → remove > prefix
+  result = result.replace(/^>\s?/gm, '');
+
+  return result;
+}
+
 export function markdownToHtml(text: string): string {
   if (!text) return text;
 
