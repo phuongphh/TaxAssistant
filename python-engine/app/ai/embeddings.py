@@ -3,6 +3,7 @@ Embedding service for vector search over tax regulation documents.
 Uses Voyage AI API (voyage-multilingual-2) for multilingual embeddings.
 """
 
+import asyncio
 import logging
 
 import chromadb
@@ -31,23 +32,34 @@ class EmbeddingService:
             metadata={"hnsw:space": "cosine"},
         )
 
+    async def _call_voyage(self, texts: list[str], input_type: str) -> list[list[float]]:
+        """Call Voyage AI API with retry on RateLimitError (handles free-tier 3 RPM limit)."""
+        wait = 20
+        for attempt in range(6):
+            try:
+                result = await self._voyage.embed(
+                    texts,
+                    model=settings.embedding_model,
+                    input_type=input_type,
+                )
+                return result.embeddings
+            except voyageai.error.RateLimitError:
+                if attempt == 5:
+                    raise
+                logger.warning(
+                    "Voyage AI rate limit hit (attempt %d/6), waiting %ds...",
+                    attempt + 1, wait,
+                )
+                await asyncio.sleep(wait)
+                wait = min(wait * 2, 60)
+
     async def _embed(self, texts: list[str]) -> list[list[float]]:
         """Call Voyage AI API to get embeddings for a list of texts."""
-        result = await self._voyage.embed(
-            texts,
-            model=settings.embedding_model,
-            input_type="document",
-        )
-        return result.embeddings
+        return await self._call_voyage(texts, input_type="document")
 
     async def _embed_query(self, query: str) -> list[list[float]]:
         """Call Voyage AI API with query input_type for better retrieval."""
-        result = await self._voyage.embed(
-            [query],
-            model=settings.embedding_model,
-            input_type="query",
-        )
-        return result.embeddings
+        return await self._call_voyage([query], input_type="query")
 
     async def add_document(
         self,
