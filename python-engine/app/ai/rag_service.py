@@ -73,7 +73,7 @@ class RAGService:
         """Internal RAG pipeline implementation."""
         # 1. Retrieve relevant documents
         logger.debug("RAG: searching ChromaDB (category=%s, n=%d)", tax_category, n_results)
-        results = self.embeddings.search(
+        results = await self.embeddings.search(
             query=question,
             n_results=n_results,
             category_filter=tax_category,
@@ -163,7 +163,7 @@ class RAGService:
         doc_ids = [f"{doc_id}_chunk_{i}" for i in range(len(chunks))]
         metadatas = [metadata] * len(chunks)
 
-        self.embeddings.add_documents_batch(doc_ids, chunks, metadatas)
+        await self.embeddings.add_documents_batch(doc_ids, chunks, metadatas)
         logger.info("Indexed regulation: %s (%d chunks)", doc_id, len(chunks))
 
     @staticmethod
