@@ -26,6 +26,22 @@ services:
       - PYTHON_GRPC_PORT=50051
       - PYTHON_REST_URL=http://tax-engine:8000
       - TELEGRAM_BOT_TOKEN=8683725208:AAHZgHtFWtWUPQwdcJiLZN0CDDDSa-Gxg2c
+    # Resource limits to prevent memory leaks
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '1.0'
+        reservations:
+          memory: 256M
+          cpus: '0.5'
+    # Health checks
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/health/live"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
     # Dev mode: run TypeScript directly with hot-reload via tsx
     # (volume mount ./node-gateway/src:/app/src makes source edits live)
     command: [ "npx", "tsx", "watch", "src/index.ts" ]

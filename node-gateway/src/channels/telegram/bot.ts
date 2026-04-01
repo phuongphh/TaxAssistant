@@ -55,13 +55,48 @@ export class TelegramAdapter implements ChannelAdapter {
   async initialize(): Promise<void> {
     // Register message handler
     this.bot.on('message', async (ctx: Context<Update.MessageUpdate>) => {
+      const messageId = ctx.message?.message_id;
+      const userId = ctx.from?.id;
+      const chatId = ctx.chat?.id;
+      const text = 'text' in ctx.message ? ctx.message.text : '[non-text message]';
+      
       try {
+        logger.debug('Received Telegram message', {
+          messageId,
+          userId,
+          chatId,
+          textPreview: typeof text === 'string' ? text.slice(0, 100) : text,
+        });
+        
         const message = mapTelegramMessage(ctx);
         if (message && this.messageHandler) {
           await this.messageHandler(message);
+          logger.debug('Telegram message processed successfully', { messageId, userId, chatId });
+        } else {
+          logger.warn('No message handler or mapped message', { messageId, userId, chatId });
         }
       } catch (error) {
-        logger.error('Error processing Telegram message', { error });
+        logger.error('Error processing Telegram message', {
+          error: error instanceof Error ? error.message : String(error),
+          stack: error instanceof Error ? error.stack : undefined,
+          messageId,
+          userId,
+          chatId,
+        });
+        
+        // Try to send error message to user
+        try {
+          if (chatId && typeof text === 'string') {
+            await ctx.reply('Xin lỗi, tôi gặp sự cố khi xử lý tin nhắn của bạn. Vui lòng thử lại sau.');
+          }
+        } catch (sendError) {
+          logger.error('Failed to send error message for Telegram message', {
+            sendError: sendError instanceof Error ? sendError.message : String(sendError),
+            messageId,
+            userId,
+            chatId,
+          });
+        }
       }
     });
 
@@ -106,16 +141,51 @@ export class TelegramAdapter implements ChannelAdapter {
 
     // Bot commands
     this.bot.command('start', async (ctx) => {
-      await ctx.reply(
-        'Xin chào! Tôi là Trợ lý Thuế ảo. 🇻🇳\n\n' +
-        'Tôi có thể hỗ trợ bạn các vấn đề về:\n' +
-        '• Thuế GTGT (VAT)\n' +
-        '• Thuế thu nhập doanh nghiệp (CIT)\n' +
-        '• Thuế thu nhập cá nhân (PIT)\n' +
-        '• Thuế môn bài\n' +
-        '• Kê khai và nộp thuế\n\n' +
-        'Hãy gửi câu hỏi của bạn để tôi hỗ trợ!',
-      );
+      try {
+        logger.info('Processing /start command', {
+          userId: ctx.from?.id,
+          chatId: ctx.chat?.id,
+        });
+        
+        const serviceMenu = 
+          'Xin chào! Tôi là "Bé Thuế" - Trợ lý Thuế ảo. 🇻🇳\n\n' +
+          'Tôi có thể hỗ trợ bạn:\n\n' +
+          '1. **Tính thuế (GTGT, TNDN, TNCN, Môn bài)**\n' +
+          '   Ví dụ: "Tính thuế TNCN lương 20 triệu"\n\n' +
+          '2. **Hướng dẫn kê khai và nộp thuế**\n' +
+          '   Ví dụ: "Cách kê khai thuế GTGT tháng 3?"\n\n' +
+          '3. **Thời hạn nộp thuế**\n' +
+          '   Ví dụ: "Hạn nộp thuế môn bài 2025 là khi nào?"\n\n' +
+          '4. **Đăng ký mã số thuế**\n' +
+          '   Ví dụ: "Thủ tục đăng ký MST cá nhân"\n\n' +
+          '5. **Dịch vụ tư vấn về thuế với các dẫn chứng từ văn bản pháp luật**\n' +
+          '   Ví dụ: "Tra cứu thông tư 78/2014/TT-BTC"\n\n' +
+          'Hãy gửi câu hỏi của bạn để tôi hỗ trợ!';
+        
+        await ctx.reply(serviceMenu, {
+          parse_mode: 'Markdown',
+        });
+        
+        logger.info('/start command processed successfully', {
+          userId: ctx.from?.id,
+          chatId: ctx.chat?.id,
+        });
+      } catch (error) {
+        logger.error('Error processing /start command', {
+          error: error instanceof Error ? error.message : String(error),
+          userId: ctx.from?.id,
+          chatId: ctx.chat?.id,
+        });
+        
+        // Try to send error message to user
+        try {
+          await ctx.reply('Xin lỗi, tôi gặp sự cố khi xử lý lệnh /start. Vui lòng thử lại sau.');
+        } catch (sendError) {
+          logger.error('Failed to send error message for /start command', {
+            sendError: sendError instanceof Error ? sendError.message : String(sendError),
+          });
+        }
+      }
     });
 
     this.bot.command('help', async (ctx) => {

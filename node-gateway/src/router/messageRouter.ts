@@ -2,9 +2,18 @@ import { v4 as uuidv4 } from 'uuid';
 import { logger } from '../utils/logger';
 import { IncomingMessage, OutgoingMessage, ChannelAdapter } from '../channels/types';
 import { SessionManager } from '../session/manager';
-import { SessionData, CustomerProfile, ActiveCase } from '../session/store';
+import { SessionData, CustomerProfile, ActiveCase, Suggestion } from '../session/store';
 import { TaxEngineClient } from '../grpc/client';
 import { TaxEngineError, SessionError } from '../utils/errors';
+import {
+  generateSuggestions,
+  detectContext,
+  formatSuggestions,
+  isSuggestionChoice,
+  getSuggestionAction,
+  updateContextFromAction,
+  ConversationContext
+} from '../services/suggestionGenerator';
 
 /**
  * Message Router - the central orchestrator
@@ -98,19 +107,47 @@ export class MessageRouter {
         });
       }
 
-      // 3. Check for bot commands
+      // 3. Check if user input is a suggestion choice
+      if (message.text && session.pendingSuggestions && isSuggestionChoice(message.text)) {
+        const action = getSuggestionAction(message.text.trim(), session.pendingSuggestions);
+        if (action) {
+          // Update context based on chosen suggestion
+          const newContext = updateContextFromAction(action);
+          session.currentContext = newContext;
+          
+          // Clear pending suggestions since user made a choice
+          session.pendingSuggestions = [];
+          await this.sessionManager.saveSession(session);
+          
+          // Process the suggestion action
+          const suggestionResponse = await this.processSuggestionAction(action, session, message);
+          if (suggestionResponse) {
+            await this.sendReply(message, suggestionResponse);
+            return;
+          }
+        }
+      }
+
+      // 4. Check for bot commands
       const commandResult = await this.handleCommand(message, session);
       if (commandResult) {
         await this.sendReply(message, commandResult);
         return;
       }
 
-      // 4. Record user message
+      // 5. Record user message
       if (message.text) {
         await this.sessionManager.recordUserMessage(session.sessionId, message.text);
       }
 
-      // 5. Route to Tax Engine with full context
+      // 5.5 Clear pending suggestions if user sends a new query (not a suggestion choice)
+      // This ensures suggestions are context-aware for the new query
+      if (session.pendingSuggestions && message.text && !isSuggestionChoice(message.text)) {
+        session.pendingSuggestions = [];
+        session.currentContext = undefined;
+      }
+
+      // 6. Route to Tax Engine with full context
       // NOTE: We use the original 'session' (not re-read from Redis) because
       // its conversationHistory contains turns BEFORE the current message,
       // while the current message is passed separately as request.message.
@@ -123,7 +160,7 @@ export class MessageRouter {
         activeCases,
       );
 
-      // 6. Build and send reply
+      // 7. Build and send reply
       const reply: OutgoingMessage = {
         text: engineResponse.reply,
         quickReplies: engineResponse.actions
@@ -139,9 +176,21 @@ export class MessageRouter {
         reply.text += `\n\n📎 Tham khảo:\n${refs}`;
       }
 
+      // 7.5 Generate and add context-aware suggestions
+      const context = detectContext(engineResponse.reply);
+      session.currentContext = context;
+      const suggestions = generateSuggestions(context);
+      session.pendingSuggestions = suggestions;
+      
+      // Add suggestions to reply text
+      if (suggestions.length > 0) {
+        reply.text += formatSuggestions(suggestions);
+      }
+      
+      await this.sessionManager.saveSession(session);
       await this.sendReply(message, reply);
 
-      // 7. Record assistant reply
+      // 8. Record assistant reply
       await this.sessionManager.recordAssistantReply(session.sessionId, engineResponse.reply);
     } catch (error: any) {
       const errorName = error?.name ?? 'UnknownError';
@@ -207,6 +256,60 @@ export class MessageRouter {
       default:
         return null;
     }
+  }
+
+  /**
+   * Process suggestion action and generate appropriate response
+   */
+  private async processSuggestionAction(
+    action: string,
+    session: SessionData,
+    message: IncomingMessage
+  ): Promise<OutgoingMessage | null> {
+    logger.info('Processing suggestion action', {
+      action,
+      sessionId: session.sessionId,
+      userId: message.userId,
+    });
+
+    // Map action to appropriate response
+    const actionResponses: Record<string, string> = {
+      'calculate_another_tax': 'Bạn muốn tính loại thuế nào? (GTGT, TNDN, TNCN, Môn bài)',
+      'show_declaration_guide': 'Dưới đây là hướng dẫn kê khai chi tiết:\n1. Chuẩn bị hồ sơ chứng từ\n2. Điền thông tin vào tờ khai\n3. Nộp tờ khai và chờ xác nhận',
+      'check_deadline': 'Bạn muốn kiểm tra thời hạn nộp cho loại thuế nào?',
+      'check_other_deadlines': 'Dưới đây là thời hạn nộp các loại thuế chính:\n- Thuế môn bài: 30/1 hàng năm\n- Thuế GTGT: 20th của tháng sau\n- Thuế TNDN tạm tính: 30th hàng quý\n- Thuế TNCN: 20th của tháng sau',
+      'calculate_late_fee': 'Để tính phí chậm nộp, vui lòng cung cấp:\n- Số tiền thuế phải nộp\n- Ngày hạn nộp\n- Ngày thực tế nộp',
+      'show_online_payment_guide': 'Hướng dẫn nộp thuế trực tuyến:\n1. Đăng ký tài khoản trên trang web của Tổng cục Thuế\n2. Tạo giao dịch nộp thuế\n3. Thanh toán qua ngân hàng hoặc ví điện tử',
+      'find_related_documents': 'Bạn muốn tìm văn bản pháp luật liên quan đến lĩnh vực nào?',
+      'show_application_guide': 'Hướng dẫn áp dụng văn bản pháp luật:\n1. Xác định phạm vi áp dụng\n2. Kiểm tra điều kiện áp dụng\n3. Thực hiện theo quy định',
+      'check_latest_documents': 'Tôi sẽ kiểm tra các văn bản pháp luật mới nhất về thuế cho bạn.',
+      'show_document_preparation': 'Hướng dẫn chuẩn bị hồ sơ đăng ký MST:\n1. CMND/CCCD bản sao công chứng\n2. Đơn đăng ký theo mẫu\n3. Giấy tờ chứng minh địa điểm kinh doanh',
+      'register_online': 'Hướng dẫn đăng ký MST trực tuyến:\n1. Truy cập trang web dichvucong.gdt.gov.vn\n2. Điền thông tin theo hướng dẫn\n3. Nộp hồ sơ và chờ phê duyệt',
+      'check_registration_status': 'Để kiểm tra tình trạng hồ sơ, vui lòng cung cấp số hồ sơ hoặc mã tra cứu.',
+      'download_form': 'Bạn cần tải mẫu tờ khai cho loại thuế nào?',
+      'show_filling_guide': 'Hướng dẫn điền tờ khai chi tiết:\n1. Điền đầy đủ thông tin cá nhân/doanh nghiệp\n2. Kê khai doanh thu, chi phí\n3. Tính toán số thuế phải nộp',
+      'check_common_errors': 'Các lỗi thường gặp khi kê khai:\n1. Sai thông tin cá nhân/doanh nghiệp\n2. Tính toán sai số thuế\n3. Nộp chậm hạn quy định',
+      'calculate_tax': 'Bạn muốn tính loại thuế nào? (GTGT, TNDN, TNCN, Môn bài)',
+      'check_deadlines': 'Bạn muốn xem hạn nộp cho loại thuế nào?',
+      'search_legal_docs': 'Bạn muốn tra cứu văn bản pháp luật nào về thuế?'
+    };
+
+    const responseText = actionResponses[action] || 'Tôi đã xử lý yêu cầu của bạn. Bạn cần hỗ trợ gì thêm?';
+    
+    // Generate new suggestions for the response
+    const context = updateContextFromAction(action);
+    const suggestions = generateSuggestions(context);
+    
+    const reply: OutgoingMessage = {
+      text: responseText + formatSuggestions(suggestions),
+    };
+
+    // Update session with new context and suggestions
+    session.currentContext = context;
+    session.pendingSuggestions = suggestions;
+    await this.sessionManager.saveSession(session);
+
+    return reply;
   }
 
   /**
