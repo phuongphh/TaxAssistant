@@ -2,9 +2,18 @@ import { v4 as uuidv4 } from 'uuid';
 import { logger } from '../utils/logger';
 import { IncomingMessage, OutgoingMessage, ChannelAdapter } from '../channels/types';
 import { SessionManager } from '../session/manager';
-import { SessionData, CustomerProfile, ActiveCase } from '../session/store';
+import { SessionData, CustomerProfile, ActiveCase, Suggestion } from '../session/store';
 import { TaxEngineClient } from '../grpc/client';
 import { TaxEngineError, SessionError } from '../utils/errors';
+import {
+  generateSuggestions,
+  detectContext,
+  formatSuggestions,
+  isSuggestionChoice,
+  getSuggestionAction,
+  updateContextFromAction,
+  ConversationContext
+} from '../services/suggestionGenerator';
 
 /**
  * Message Router - the central orchestrator
@@ -67,9 +76,66 @@ export class MessageRouter {
         message.channel,
       );
 
-      // ── 2. Local commands — zero gRPC cost ────────────────────────────
-      // Check BEFORE fetching the customer profile so /loai and /reset
-      // never trigger unnecessary gRPC round-trips.
+      logger.info('Session resolved: %s, history=%d entries',
+        session.sessionId, session.conversationHistory?.length ?? 0);
+
+      // 2. Resolve customer profile (persistent, DB-backed)
+      let customerProfile: CustomerProfile | undefined;
+      let activeCases: ActiveCase[] = [];
+      try {
+        customerProfile = await this.taxEngine.getOrCreateCustomer(
+          message.channel,
+          message.userId,
+          {
+            username: message.telegramUsername,
+            firstName: message.firstName,
+            lastName: message.lastName,
+          },
+        );
+        // Sync customer profile data into session and persist to Redis
+        if (customerProfile?.customerId) {
+          session.customerId = customerProfile.customerId;
+          session.customerProfile = customerProfile;
+          // Sync customer type from profile → session
+          if (customerProfile.customerType && customerProfile.customerType !== 'unknown') {
+            session.customerType = customerProfile.customerType as SessionData['customerType'];
+          }
+          // Persist session so subsequent Redis reads see updated values
+          await this.sessionManager.saveSession(session);
+        }
+        // Get active support cases
+        if (customerProfile?.customerId) {
+          activeCases = await this.taxEngine.getActiveCases(customerProfile.customerId);
+        }
+      } catch (profileError: any) {
+        logger.warn('Customer profile resolution failed, continuing without profile', {
+          error: profileError?.message,
+          userId: message.userId,
+        });
+      }
+
+      // 3. Check if user input is a suggestion choice
+      if (message.text && session.pendingSuggestions && isSuggestionChoice(message.text)) {
+        const action = getSuggestionAction(message.text.trim(), session.pendingSuggestions);
+        if (action) {
+          // Update context based on chosen suggestion
+          const newContext = updateContextFromAction(action);
+          session.currentContext = newContext;
+
+          // Clear pending suggestions since user made a choice
+          session.pendingSuggestions = [];
+          await this.sessionManager.saveSession(session);
+
+          // Process the suggestion action
+          const suggestionResponse = await this.processSuggestionAction(action, session, message);
+          if (suggestionResponse) {
+            await this.sendReply(message, suggestionResponse);
+            return;
+          }
+        }
+      }
+
+      // 4. Check for bot commands
       const commandResult = await this.handleCommand(message, session);
       if (commandResult) {
         await this.sendReply(message, commandResult);
@@ -77,46 +143,24 @@ export class MessageRouter {
         return;
       }
 
-      // ── 3. Parallel setup ─────────────────────────────────────────────
-      // a) Customer profile + cases (gRPC, with session-level cache)
-      // b) Typing-indicator placeholder (Telegram API round-trip)
-      // c) Record user message in history (Redis write — non-blocking)
+      // 5. Record user message
       if (message.text) {
         this.sessionManager
           .recordUserMessage(session.sessionId, message.text)
           .catch((e) => logger.warn('recordUserMessage failed', { requestId, error: e?.message }));
       }
 
-      const adapter = this.channelAdapters.get(message.channel);
-      const [profileResult, streamResult] = await Promise.allSettled([
-        this.resolveCustomerContext(message, session),
-        adapter?.sendStreamStart ? adapter.sendStreamStart(message.chatId) : Promise.resolve(undefined),
-      ]);
-
-      const { customerProfile, activeCases } =
-        profileResult.status === 'fulfilled'
-          ? profileResult.value
-          : { customerProfile: session.customerProfile, activeCases: [] };
-
-      const streamHandle =
-        streamResult.status === 'fulfilled' ? streamResult.value : undefined;
-
-      // Persist profile update to session if it changed (non-blocking)
-      if (customerProfile?.customerId && customerProfile.customerId !== session.customerId) {
-        session.customerId = customerProfile.customerId;
-        session.customerProfile = customerProfile;
-        if (customerProfile.customerType && customerProfile.customerType !== 'unknown') {
-          session.customerType = customerProfile.customerType as SessionData['customerType'];
-        }
-        this.sessionManager
-          .saveSession(session)
-          .catch((e) => logger.warn('Session profile sync failed', { requestId, error: e?.message }));
+      // 5.5 Clear pending suggestions if user sends a new query (not a suggestion choice)
+      // This ensures suggestions are context-aware for the new query
+      if (session.pendingSuggestions && message.text && !isSuggestionChoice(message.text)) {
+        session.pendingSuggestions = [];
+        session.currentContext = undefined;
       }
 
-      // ── 4. Resolve text (suggestion shortcuts "1", "2", "3") ──────────
+      // Resolve text (suggestion shortcuts "1", "2", "3")
       const resolvedText = this.resolveText(message, session);
 
-      // ── 5. Tax Engine ─────────────────────────────────────────────────
+      // 6. Route to Tax Engine with full context
       logger.info('Calling Tax Engine', { requestId, elapsedMs: Date.now() - startMs });
       const engineResponse = await this.taxEngine.processMessage(
         requestId,
@@ -126,30 +170,42 @@ export class MessageRouter {
         activeCases,
       );
 
-      // ── 6. Send reply ─────────────────────────────────────────────────
-      const reply = this.buildReply(engineResponse);
-      if (streamHandle) {
-        await streamHandle.finalize(reply);
-      } else {
-        await this.sendReply(message, reply);
+      // 7. Build reply
+      const reply: OutgoingMessage = {
+        text: engineResponse.reply,
+        quickReplies: engineResponse.actions
+          ?.filter((a) => a.actionType === 'quick_reply')
+          .map((a) => ({ label: a.label, payload: a.payload })),
+      };
+
+      // Add references as footer if available
+      if (engineResponse.references?.length > 0) {
+        const refs = engineResponse.references
+          .map((r, i) => `[${i + 1}] ${r.title}`)
+          .join('\n');
+        reply.text += `\n\n📎 Tham khảo:\n${refs}`;
       }
+      logger.info('Reply built', { requestId, elapsedMs: Date.now() - startMs });
+
+      // 7.5 Generate and add context-aware suggestions
+      const context = detectContext(engineResponse.reply);
+      session.currentContext = context;
+      const suggestions = generateSuggestions(context);
+      session.pendingSuggestions = suggestions;
+
+      // Add suggestions to reply text
+      if (suggestions.length > 0) {
+        reply.text += formatSuggestions(suggestions);
+      }
+
+      await this.sessionManager.saveSession(session);
+      await this.sendReply(message, reply);
       logger.info('Reply sent', { requestId, elapsedMs: Date.now() - startMs });
 
-      // ── 7. Post-reply persistence (fire & forget) ─────────────────────
-      // These don't affect the user's experience so we don't await them.
+      // 8. Record assistant reply (fire & forget)
       this.sessionManager
         .recordAssistantReply(session.sessionId, engineResponse.reply)
         .catch((e) => logger.warn('recordAssistantReply failed', { requestId, error: e?.message }));
-
-      const quickReplies =
-        engineResponse.actions
-          ?.filter((a: { actionType: string }) => a.actionType === 'quick_reply')
-          .map((a: { payload: string }) => a.payload) ?? [];
-      if (quickReplies.length > 0) {
-        this.sessionManager
-          .updateContext(session.sessionId, { lastSuggestions: quickReplies })
-          .catch((e) => logger.warn('updateContext failed', { requestId, error: e?.message }));
-      }
     } catch (error: any) {
       const errorName = error?.name ?? 'UnknownError';
       const errorMsg = error?.message ?? String(error);
@@ -287,23 +343,55 @@ export class MessageRouter {
   }
 
   /**
-   * Build an OutgoingMessage from a TaxEngineResponse.
+   * Process suggestion action and generate appropriate response
    */
-  private buildReply(engineResponse: { reply: string; actions?: Array<{ actionType: string; label: string; payload: string }>; references?: Array<{ title: string }> }): OutgoingMessage {
-    const reply: OutgoingMessage = {
-      text: engineResponse.reply,
-      // Show quick_reply actions as inline buttons.
-      quickReplies: engineResponse.actions
-        ?.filter((a) => a.actionType === 'quick_reply')
-        .map((a) => ({ label: a.label, payload: a.payload })),
+  private async processSuggestionAction(
+    action: string,
+    session: SessionData,
+    message: IncomingMessage
+  ): Promise<OutgoingMessage | null> {
+    logger.info('Processing suggestion action', {
+      action,
+      sessionId: session.sessionId,
+      userId: message.userId,
+    });
+
+    // Map action to appropriate response
+    const actionResponses: Record<string, string> = {
+      'calculate_another_tax': 'Bạn muốn tính loại thuế nào? (GTGT, TNDN, TNCN, Môn bài)',
+      'show_declaration_guide': 'Dưới đây là hướng dẫn kê khai chi tiết:\n1. Chuẩn bị hồ sơ chứng từ\n2. Điền thông tin vào tờ khai\n3. Nộp tờ khai và chờ xác nhận',
+      'check_deadline': 'Bạn muốn kiểm tra thời hạn nộp cho loại thuế nào?',
+      'check_other_deadlines': 'Dưới đây là thời hạn nộp các loại thuế chính:\n- Thuế môn bài: 30/1 hàng năm\n- Thuế GTGT: 20th của tháng sau\n- Thuế TNDN tạm tính: 30th hàng quý\n- Thuế TNCN: 20th của tháng sau',
+      'calculate_late_fee': 'Để tính phí chậm nộp, vui lòng cung cấp:\n- Số tiền thuế phải nộp\n- Ngày hạn nộp\n- Ngày thực tế nộp',
+      'show_online_payment_guide': 'Hướng dẫn nộp thuế trực tuyến:\n1. Đăng ký tài khoản trên trang web của Tổng cục Thuế\n2. Tạo giao dịch nộp thuế\n3. Thanh toán qua ngân hàng hoặc ví điện tử',
+      'find_related_documents': 'Bạn muốn tìm văn bản pháp luật liên quan đến lĩnh vực nào?',
+      'show_application_guide': 'Hướng dẫn áp dụng văn bản pháp luật:\n1. Xác định phạm vi áp dụng\n2. Kiểm tra điều kiện áp dụng\n3. Thực hiện theo quy định',
+      'check_latest_documents': 'Tôi sẽ kiểm tra các văn bản pháp luật mới nhất về thuế cho bạn.',
+      'show_document_preparation': 'Hướng dẫn chuẩn bị hồ sơ đăng ký MST:\n1. CMND/CCCD bản sao công chứng\n2. Đơn đăng ký theo mẫu\n3. Giấy tờ chứng minh địa điểm kinh doanh',
+      'register_online': 'Hướng dẫn đăng ký MST trực tuyến:\n1. Truy cập trang web dichvucong.gdt.gov.vn\n2. Điền thông tin theo hướng dẫn\n3. Nộp hồ sơ và chờ phê duyệt',
+      'check_registration_status': 'Để kiểm tra tình trạng hồ sơ, vui lòng cung cấp số hồ sơ hoặc mã tra cứu.',
+      'download_form': 'Bạn cần tải mẫu tờ khai cho loại thuế nào?',
+      'show_filling_guide': 'Hướng dẫn điền tờ khai chi tiết:\n1. Điền đầy đủ thông tin cá nhân/doanh nghiệp\n2. Kê khai doanh thu, chi phí\n3. Tính toán số thuế phải nộp',
+      'check_common_errors': 'Các lỗi thường gặp khi kê khai:\n1. Sai thông tin cá nhân/doanh nghiệp\n2. Tính toán sai số thuế\n3. Nộp chậm hạn quy định',
+      'calculate_tax': 'Bạn muốn tính loại thuế nào? (GTGT, TNDN, TNCN, Môn bài)',
+      'check_deadlines': 'Bạn muốn xem hạn nộp cho loại thuế nào?',
+      'search_legal_docs': 'Bạn muốn tra cứu văn bản pháp luật nào về thuế?',
     };
 
-    if (engineResponse.references?.length) {
-      const refs = engineResponse.references
-        .map((r, i) => `[${i + 1}] ${r.title}`)
-        .join('\n');
-      reply.text += `\n\n📎 Tham khảo:\n${refs}`;
-    }
+    const responseText = actionResponses[action] || 'Tôi đã xử lý yêu cầu của bạn. Bạn cần hỗ trợ gì thêm?';
+
+    // Generate new suggestions for the response
+    const context = updateContextFromAction(action);
+    const suggestions = generateSuggestions(context);
+
+    const reply: OutgoingMessage = {
+      text: responseText + formatSuggestions(suggestions),
+    };
+
+    // Update session with new context and suggestions
+    session.currentContext = context;
+    session.pendingSuggestions = suggestions;
+    await this.sessionManager.saveSession(session);
 
     return reply;
   }

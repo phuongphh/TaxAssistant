@@ -8,9 +8,14 @@ import { TaxEngineClient } from './grpc/client';
 import { MessageRouter } from './router/messageRouter';
 import { createServer } from './api/server';
 import { setTelegramAdapter } from './api/routes/health';
+import { memoryMonitor } from './utils/memoryMonitor';
 
 async function bootstrap(): Promise<void> {
   logger.info('Starting Tax Assistant Gateway...', { env: config.app.env });
+
+  // === Start memory monitoring ===
+  memoryMonitor.start();
+  logger.info('Memory monitor started');
 
   // === Initialize core services ===
   const sessionStore = new SessionStore();
@@ -50,6 +55,9 @@ async function bootstrap(): Promise<void> {
   // === Graceful shutdown ===
   const shutdown = async (signal: string) => {
     logger.info(`Received ${signal}, shutting down gracefully...`);
+
+    // Stop memory monitor first
+    memoryMonitor.stop();
 
     server.close(() => {
       logger.info('HTTP server closed');
