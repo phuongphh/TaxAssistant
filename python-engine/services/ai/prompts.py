@@ -36,7 +36,8 @@ Hãy trả lời:
 1. Giải đáp câu hỏi cụ thể
 2. Nêu căn cứ pháp lý
 3. Đưa ra lưu ý quan trọng (nếu có)
-4. Gợi ý hành động tiếp theo"""
+
+KHÔNG thêm câu hỏi gợi ý tiếp theo (ví dụ: "Bạn muốn làm gì tiếp theo?") — hệ thống sẽ tự thêm nút gợi ý."""
 
 DOCUMENT_ANALYSIS_PROMPT = """Phân tích tài liệu thuế sau:
 
