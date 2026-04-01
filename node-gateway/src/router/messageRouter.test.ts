@@ -227,8 +227,8 @@ describe('MessageRouter - Suggestion Handling', () => {
       // Check that sendReply was called with a message containing suggestions
       expect(sendReplySpy).toHaveBeenCalled();
       const callArgs = sendReplySpy.mock.calls[0];
-      const replyMessage = callArgs[1];
-      
+      const replyMessage = callArgs[1] as { text: string };
+
       // Reply should contain the tax engine response
       expect(replyMessage.text).toContain('Thuế TNCN phải nộp là 1.5 triệu đồng.');
       // And should contain suggestions
