@@ -138,8 +138,8 @@ router.get('/health/metrics', (_req: Request, res: Response) => {
     eventLoop: {
       delay: 0, // Would need measurement
     },
-    activeHandles: process._getActiveHandles?.()?.length || 0,
-    activeRequests: process._getActiveRequests?.()?.length || 0,
+    activeHandles: (process as any)._getActiveHandles?.()?.length || 0,
+    activeRequests: (process as any)._getActiveRequests?.()?.length || 0,
     memoryMonitor: memoryMonitorStatus,
   };
   

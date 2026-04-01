@@ -165,8 +165,8 @@ export class MemoryMonitor {
   private logDetailedMemoryInfo(): void {
     try {
       // Log active handles and requests
-      const activeHandles = process._getActiveHandles?.()?.length || 0;
-      const activeRequests = process._getActiveRequests?.()?.length || 0;
+      const activeHandles = (process as any)._getActiveHandles?.()?.length || 0;
+      const activeRequests = (process as any)._getActiveRequests?.()?.length || 0;
       
       logger.info('Detailed memory info', {
         activeHandles,
