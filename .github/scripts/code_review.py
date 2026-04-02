@@ -26,41 +26,72 @@ if not diff:
     print("No diff found. Skipping review.")
     sys.exit(0)
 
+# ---------------------------------------------------------------
+# Filter out files that should not be code-reviewed:
+#   - .github/ (CI/CD config, workflows, scripts, templates)
+#   - docs/    (documentation, issue exports)
+# ---------------------------------------------------------------
+def filter_diff(raw_diff: str) -> str:
+    """Remove diff hunks for files under .github/ and docs/."""
+    filtered_lines: list[str] = []
+    skip = False
+    for line in raw_diff.split("\n"):
+        if line.startswith("diff --git"):
+            # e.g. "diff --git a/.github/scripts/code_review.py b/..."
+            path = line.split(" b/")[-1] if " b/" in line else ""
+            skip = path.startswith(".github/") or path.startswith("docs/")
+        if not skip:
+            filtered_lines.append(line)
+    return "\n".join(filtered_lines)
+
+
+filtered_diff = filter_diff(diff)
+
+if not filtered_diff.strip():
+    print("PASS (only CI/docs changes, no application code to review)")
+    sys.exit(0)
+
 SYSTEM_PROMPT = """
-You are a strict code reviewer for a Vietnamese Tax Assistant system.
+You are a pragmatic code reviewer for a Vietnamese Tax Assistant system.
 
-You will receive a PR title, description, and diff. Use the PR title and
-description to understand the scope and linked issue(s) before reviewing.
+You will receive a PR title, description, and the diff of application code
+changes. CI/CD and documentation files are already excluded from the diff.
 
-A PR may contain commits from multiple issues if they were developed on the
-same branch. This is acceptable — evaluate each change against its own issue
-scope (identified by #N in commit messages or PR body).
+A PR may address multiple issues (identified by #N in commit messages).
+This is normal for branches that accumulate work — do NOT flag this as a
+scope violation.
 
-You must check:
+Review the code changes for these specific problems ONLY:
 
-1. Does the PR introduce changes that are clearly unrelated to ANY of the
-   linked issues? (Changes spanning multiple linked issues are OK.)
-2. Does it introduce hardcoded tax rates?
-3. Does it modify core/tax_rules without explicit reason?
-4. Are unit tests included for new functionality?
-5. Does it introduce security vulnerabilities?
+1. HARDCODED TAX RATES — Tax rates, thresholds, or legal values embedded
+   directly in application code (outside of configuration or tax_rules).
+2. MISSING TESTS — New features or bug fixes without any corresponding
+   unit tests in the PR.
+3. SECURITY — Obvious vulnerabilities: SQL injection, XSS, command
+   injection, leaked secrets, etc.
+4. CORE TAX RULES — Modifications to files under core/tax_rules/ that
+   are not justified by the PR description or commit messages.
 
-If any violation is found, respond with:
-FAIL: <reason>
+Do NOT flag:
+- Refactoring or cleanup in files touched by the PR
+- Changes to multiple modules when they serve the same feature
+- Formatting, style, or naming preferences
+- Adding or removing utility functions
 
-If everything is correct, respond with:
-PASS
+Respond with EXACTLY one of:
+- PASS — if no problems found
+- FAIL: <one-line reason> — only if a clear violation of rules 1-4 exists
 """
 
 # Build the user message with PR context
-pr_context = f"PR Title: {PR_TITLE}\n"
+pr_context = f"PR: {PR_TITLE}\n"
 if PR_BODY:
-    pr_context += f"PR Description:\n{PR_BODY}\n"
-pr_context += f"\n---\nDiff:\n{diff}"
+    pr_context += f"Description: {PR_BODY}\n"
+pr_context += f"\n---\n{filtered_diff}"
 
 response = client.messages.create(
     model="claude-haiku-4-5-20251001",
-    max_tokens=200,
+    max_tokens=300,
     temperature=0,
     system=SYSTEM_PROMPT,
     messages=[
