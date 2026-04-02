@@ -6,6 +6,8 @@ import requests
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")
 PR_NUMBER = os.environ.get("PR_NUMBER")
+PR_TITLE = os.environ.get("PR_TITLE", "")
+PR_BODY = os.environ.get("PR_BODY", "")
 REPO = os.environ.get("REPO")
 
 if not ANTHROPIC_API_KEY:
@@ -27,13 +29,21 @@ if not diff:
 SYSTEM_PROMPT = """
 You are a strict code reviewer for a Vietnamese Tax Assistant system.
 
+You will receive a PR title, description, and diff. Use the PR title and
+description to understand the scope and linked issue(s) before reviewing.
+
+A PR may contain commits from multiple issues if they were developed on the
+same branch. This is acceptable — evaluate each change against its own issue
+scope (identified by #N in commit messages or PR body).
+
 You must check:
 
-1. Does the PR modify files outside the issue scope?
+1. Does the PR introduce changes that are clearly unrelated to ANY of the
+   linked issues? (Changes spanning multiple linked issues are OK.)
 2. Does it introduce hardcoded tax rates?
 3. Does it modify core/tax_rules without explicit reason?
-4. Are unit tests included?
-5. Does it modify unrelated modules?
+4. Are unit tests included for new functionality?
+5. Does it introduce security vulnerabilities?
 
 If any violation is found, respond with:
 FAIL: <reason>
@@ -41,6 +51,12 @@ FAIL: <reason>
 If everything is correct, respond with:
 PASS
 """
+
+# Build the user message with PR context
+pr_context = f"PR Title: {PR_TITLE}\n"
+if PR_BODY:
+    pr_context += f"PR Description:\n{PR_BODY}\n"
+pr_context += f"\n---\nDiff:\n{diff}"
 
 response = client.messages.create(
     model="claude-haiku-4-5-20251001",
@@ -50,7 +66,7 @@ response = client.messages.create(
     messages=[
         {
             "role": "user",
-            "content": diff
+            "content": pr_context
         }
     ]
 )
