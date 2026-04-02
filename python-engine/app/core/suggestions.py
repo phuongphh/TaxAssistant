@@ -124,18 +124,3 @@ def generate_suggestions(
     return _DEFAULT_SUGGESTIONS[:3]
 
 
-def format_suggestions(suggestions: list[str]) -> str:
-    """Format suggestions as a numbered text block to append to bot replies.
-
-    Returns:
-        Formatted string like:
-        ---
-        Bạn muốn làm gì tiếp theo?
-        1. Suggestion one
-        2. Suggestion two
-        3. Suggestion three
-    """
-    lines = ["", "---", "Bạn muốn làm gì tiếp theo?"]
-    for i, s in enumerate(suggestions, 1):
-        lines.append(f"{i}. {s}")
-    return "\n".join(lines)

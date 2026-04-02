@@ -4,9 +4,21 @@ Tests for the context-aware suggestion generator.
 
 import pytest
 
+import app.core.suggestions as suggestions_module
 from app.core.suggestions import generate_suggestions
 from app.core.intent_classifier import Intent
 from app.core.tax_rules.base import TaxCategory
+
+
+class TestFormatSuggestionsRemoved:
+    """Issue #48: format_suggestions was removed to eliminate the duplicate
+    'Bạn muốn làm gì tiếp theo?' text prompt. Only inline buttons remain."""
+
+    def test_format_suggestions_not_exported(self):
+        assert not hasattr(suggestions_module, "format_suggestions"), (
+            "format_suggestions should be removed — "
+            "follow-up suggestions are now only sent as inline buttons"
+        )
 
 
 class TestGenerateSuggestions:
