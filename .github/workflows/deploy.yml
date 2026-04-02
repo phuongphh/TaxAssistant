@@ -1,0 +1,33 @@
+name: Tự động Deploy lên VPS từ PROD
+
+on:
+  push:
+    branches: [ prod ]  # Chỉ chạy khi có code được push hoặc merge vào prod
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Deploy lên VPS qua SSH
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            cd ~/TaxAssistant
+            # Đảm bảo VPS đang ở đúng nhánh prod trước khi pull
+            git fetch origin prod
+            git checkout prod
+            git pull origin prod
+            
+            # Restart hệ thống với Docker
+            docker compose down
+            docker compose up -d --build
+            
+            # Dọn dẹp các image cũ để tránh đầy ổ cứng VPS
+            docker image prune -f
+            echo "✅ Hệ thống đã được cập nhật từ nhánh PROD!"
