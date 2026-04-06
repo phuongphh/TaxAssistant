@@ -16,7 +16,7 @@ from pathlib import Path
 from fastapi.staticfiles import StaticFiles
 
 from app.config import settings
-from app.api.routes import health, tax, portal
+from app.api.routes import health, tax, portal, notifications
 from app.grpc_server import serve_grpc
 
 PORTAL_DIR = Path(__file__).resolve().parent / "portal"
@@ -50,6 +50,7 @@ def create_app() -> FastAPI:
     app.include_router(health.router)
     app.include_router(tax.router)
     app.include_router(portal.router)
+    app.include_router(notifications.router)
 
     # Serve portal static files (CSS, JS)
     app.mount(
@@ -85,6 +86,13 @@ async def main() -> None:
     except Exception:
         logger.warning("Tax update scheduler failed to start", exc_info=True)
 
+    # Start notification scheduler (APScheduler)
+    try:
+        from app.services.notification_scheduler import notification_scheduler
+        notification_scheduler.start()
+    except Exception:
+        logger.warning("Notification scheduler failed to start", exc_info=True)
+
     # Setup shutdown
     shutdown_event = asyncio.Event()
 
@@ -117,6 +125,13 @@ async def main() -> None:
         try:
             from data.scheduler import tax_scheduler
             await tax_scheduler.stop()
+        except Exception:
+            pass
+
+        # Stop notification scheduler
+        try:
+            from app.services.notification_scheduler import notification_scheduler
+            await notification_scheduler.shutdown()
         except Exception:
             pass
 

@@ -38,6 +38,9 @@ class Settings(BaseSettings):
     # ChromaDB
     chroma_persist_dir: str = "./data/chroma"
 
+    # Telegram (used by notification scheduler to send messages directly)
+    telegram_bot_token: str = ""
+
     # Document Processing
     tesseract_lang: str = "vie"
     max_upload_size_mb: int = 10
