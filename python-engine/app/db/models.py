@@ -5,7 +5,7 @@ SQLAlchemy models for Tax Assistant persistent data.
 import uuid
 from datetime import date, datetime
 
-from sqlalchemy import BigInteger, Date, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, func, text
+from sqlalchemy import BigInteger, Boolean, Date, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, func, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -118,6 +118,9 @@ class Customer(Base):
     # Onboarding state
     onboarding_step: Mapped[str] = mapped_column(String(30), default="new")
 
+    # Notification preferences
+    notification_enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("true"))
+
     # Flexible JSONB fields for extensibility
     preferences: Mapped[dict | None] = mapped_column(JSONB, nullable=True, default=dict)
     tax_profile: Mapped[dict | None] = mapped_column(JSONB, nullable=True, default=dict)
@@ -228,3 +231,33 @@ class MetricsSnapshot(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
+
+
+class NotificationLog(Base):
+    """Log of notifications sent (or attempted) to users.
+
+    Used for anti-spam checks and delivery tracking.
+    """
+
+    __tablename__ = "notification_logs"
+    __table_args__ = (
+        Index("idx_notif_customer_sent", "customer_id", "sent_at"),
+        Index("idx_notif_job_id", "job_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    customer_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("customers.id", ondelete="CASCADE"), nullable=False,
+    )
+    job_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    notification_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    message_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    was_delivered: Mapped[bool] = mapped_column(Boolean, default=False)
+    retry_count: Mapped[int] = mapped_column(Integer, default=0)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    sent_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(),
+    )
+
+    customer: Mapped["Customer"] = relationship()
