@@ -259,6 +259,8 @@ export class TaxEngineClient {
         onboardingStep: customerProfile.onboardingStep,
         taxProfile: customerProfile.taxProfile || {},
         recentNotes: customerProfile.recentNotes || [],
+        taxPeriod: customerProfile.taxPeriod || '',
+        hasEmployees: customerProfile.hasEmployees || '',
       };
     }
 
@@ -500,6 +502,8 @@ export class TaxEngineClient {
             onboardingStep: response.onboardingStep || 'new',
             taxProfile: response.taxProfile || {},
             recentNotes: response.recentNotes || [],
+            taxPeriod: response.taxPeriod || '',
+            hasEmployees: response.hasEmployees || '',
           });
         }
       });

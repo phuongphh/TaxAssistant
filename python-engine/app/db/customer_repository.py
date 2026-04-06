@@ -108,6 +108,7 @@ class CustomerRepository:
         allowed_fields = {
             "customer_type", "business_name", "tax_code", "industry",
             "province", "annual_revenue_range", "employee_count_range",
+            "tax_period", "has_employees",
             "onboarding_step", "preferences", "tax_profile", "notes",
             "username", "first_name", "last_name", "display_name",
             "email", "phone", "address", "profile_data",
@@ -156,6 +157,8 @@ class CustomerRepository:
             "province": customer.province or "",
             "annual_revenue_range": customer.annual_revenue_range or "",
             "employee_count_range": customer.employee_count_range or "",
+            "tax_period": customer.tax_period or "",
+            "has_employees": customer.has_employees,
             "onboarding_step": customer.onboarding_step,
             "preferences": customer.preferences or {},
             "tax_profile": customer.tax_profile or {},
