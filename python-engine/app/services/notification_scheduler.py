@@ -351,9 +351,10 @@ class NotificationScheduler:
         tax_profile = c.tax_profile or {}
         return {
             "business_type": c.customer_type or "",
-            "tax_period": tax_profile.get("tax_period", ""),
+            # Prefer dedicated column, fall back to tax_profile JSONB for backwards compat
+            "tax_period": c.tax_period or tax_profile.get("tax_period", ""),
             "industry": c.industry or "",
-            "has_employees": tax_profile.get("has_employees", False),
+            "has_employees": c.has_employees if c.has_employees is not None else tax_profile.get("has_employees", False),
             "latest_revenue": tax_profile.get("latest_revenue"),
             "tax_handler": tax_profile.get("tax_handler", "unknown"),
             "display_name": c.display_name or c.first_name or "",
@@ -410,6 +411,48 @@ class NotificationScheduler:
             telegram_id, MAX_RETRIES, log_entry.error_message,
         )
         return False
+
+    async def send_preview(self, customer_id: uuid.UUID) -> dict[str, Any]:
+        """Send an immediate deadline preview to a specific user.
+
+        Called after onboarding step 2 completes (POST /notifications/preview/{user_id}).
+        Bypasses anti-spam since this is user-initiated.
+        """
+        today = datetime.now(VN_TZ).date()
+
+        try:
+            async with async_session() as session:
+                result = await session.execute(
+                    select(Customer).where(Customer.id == customer_id)
+                )
+                user = result.scalar_one_or_none()
+                if not user:
+                    return {"status": "error", "detail": "User not found"}
+
+                user_dict = self._customer_to_profile(user)
+                telegram_id = user.channel_user_id
+
+                deadlines = self._calculator.get_deadlines_for_user(user_dict, today)
+                if not deadlines:
+                    return {"status": "ok", "detail": "No upcoming deadlines", "sent": False}
+
+                # Build a preview message with all upcoming deadlines
+                message = self._builder.build_deadline_reminder(
+                    user_dict, deadlines, today,
+                )
+                if not message:
+                    return {"status": "ok", "detail": "No message to send", "sent": False}
+
+                delivered = await self._send_with_retry(
+                    session, user.id, telegram_id, message,
+                    "preview", "onboarding_preview",
+                )
+                await session.commit()
+
+                return {"status": "ok", "sent": delivered, "deadlines_count": len(deadlines)}
+        except Exception as e:
+            logger.exception("Failed to send preview for customer %s", customer_id)
+            return {"status": "error", "detail": str(e)}
 
     async def _send_telegram_message(
         self,

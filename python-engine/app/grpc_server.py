@@ -2,6 +2,7 @@
 gRPC server implementing the TaxEngine service defined in tax_service.proto.
 """
 
+import asyncio
 import logging
 import uuid as uuid_mod
 from concurrent import futures
@@ -250,6 +251,8 @@ class TaxEngineServicer(pb2_grpc.TaxEngineServicer):
                     "username": request.customer_profile.username,
                     "first_name": request.customer_profile.first_name,
                     "display_name": request.customer_profile.display_name,
+                    "tax_period": request.customer_profile.tax_period,
+                    "has_employees": request.customer_profile.has_employees == "true" if request.customer_profile.has_employees else None,
                 }
                 # Use customer_type from profile if available
                 if customer_profile["customer_type"] and customer_profile["customer_type"] != "unknown":
@@ -279,8 +282,8 @@ class TaxEngineServicer(pb2_grpc.TaxEngineServicer):
                 request.context.session_id,
             )
 
-            # Check if customer is in onboarding flow
-            if customer_profile and customer_profile.get("onboarding_step") in ("new", "collecting_type", "collecting_info"):
+            # Check if customer is in onboarding flow (step 1 or step 2)
+            if customer_profile and customer_profile.get("onboarding_step") in ("new", "collecting_type", "collecting_info", "completed", "collecting_tax_period", "collecting_employees"):
                 coro = self._handle_onboarding(
                     request, customer_profile, customer_type
                 )
@@ -467,6 +470,19 @@ class TaxEngineServicer(pb2_grpc.TaxEngineServicer):
                     list(update_fields.keys()),
                 )
 
+        # If onboarding step 2 just completed, trigger deadline preview
+        if onboarding_result.get("onboarding_complete") and onboarding_result.get("next_step") == "onboarding_done":
+            try:
+                cid = uuid_mod.UUID(customer_profile["customer_id"])
+                from app.services.notification_scheduler import notification_scheduler
+                asyncio.ensure_future(notification_scheduler.send_preview(cid))
+                logger.info(
+                    "Triggered onboarding preview notification for customer %s",
+                    customer_profile.get("customer_id"),
+                )
+            except Exception as e:
+                logger.warning("Failed to trigger onboarding preview: %s", e)
+
         return {
             "reply": onboarding_result["reply"],
             "actions": onboarding_result.get("actions", []),
@@ -508,6 +524,11 @@ class TaxEngineServicer(pb2_grpc.TaxEngineServicer):
                 "onboarding_step": request.customer_profile.onboarding_step,
                 "tax_profile": dict(request.customer_profile.tax_profile),
                 "notes": [{"note": n} for n in request.customer_profile.recent_notes],
+                "username": getattr(request.customer_profile, "username", ""),
+                "first_name": getattr(request.customer_profile, "first_name", ""),
+                "display_name": getattr(request.customer_profile, "display_name", ""),
+                "tax_period": request.customer_profile.tax_period,
+                "has_employees": request.customer_profile.has_employees == "true" if request.customer_profile.has_employees else None,
             }
             if customer_profile["customer_type"] and customer_profile["customer_type"] != "unknown":
                 customer_type = customer_profile["customer_type"]
@@ -527,7 +548,7 @@ class TaxEngineServicer(pb2_grpc.TaxEngineServicer):
 
         # Mirror the onboarding check from ProcessMessage so streaming
         # and unary RPCs behave identically.
-        if customer_profile and customer_profile.get("onboarding_step") in ("new", "collecting_type", "collecting_info"):
+        if customer_profile and customer_profile.get("onboarding_step") in ("new", "collecting_type", "collecting_info", "completed", "collecting_tax_period", "collecting_employees"):
             result = await self._handle_onboarding(
                 request, customer_profile, customer_type,
             )
@@ -736,6 +757,11 @@ class TaxEngineServicer(pb2_grpc.TaxEngineServicer):
         profile_data = customer.profile_data or {}
         profile_data_str = {k: str(v) for k, v in profile_data.items()}
 
+        # Convert has_employees bool to string for proto compatibility
+        has_employees_str = ""
+        if customer.has_employees is not None:
+            has_employees_str = "true" if customer.has_employees else "false"
+
         return pb2.CustomerProfileMsg(
             customer_id=str(customer.id),
             channel=customer.channel or "",
@@ -754,6 +780,8 @@ class TaxEngineServicer(pb2_grpc.TaxEngineServicer):
             phone=customer.phone or "",
             address=customer.address or "",
             profile_data=profile_data_str,
+            tax_period=customer.tax_period or "",
+            has_employees=has_employees_str,
         )
 
     def _case_to_proto(self, case):

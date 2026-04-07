@@ -115,6 +115,10 @@ class Customer(Base):
     annual_revenue_range: Mapped[str | None] = mapped_column(String(20), nullable=True)
     employee_count_range: Mapped[str | None] = mapped_column(String(20), nullable=True)
 
+    # Tax period & employee info (collected during onboarding step 2)
+    tax_period: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    has_employees: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+
     # Onboarding state
     onboarding_step: Mapped[str] = mapped_column(String(30), default="new")
 

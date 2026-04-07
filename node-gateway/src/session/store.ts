@@ -21,6 +21,8 @@ export interface CustomerProfile {
   onboardingStep: string;
   taxProfile: Record<string, string>;
   recentNotes: string[];
+  taxPeriod: string;
+  hasEmployees: string;
 }
 
 export interface ActiveCase {
