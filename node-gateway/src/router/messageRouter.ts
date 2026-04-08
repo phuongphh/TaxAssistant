@@ -27,6 +27,8 @@ import {
  */
 export class MessageRouter {
   private channelAdapters: Map<string, ChannelAdapter> = new Map();
+  /** Tracks users currently being processed to prevent concurrent request overlaps. */
+  private processingUsers: Set<string> = new Set();
 
   constructor(
     private sessionManager: SessionManager,
@@ -68,6 +70,20 @@ export class MessageRouter {
       type: message.type,
       textPreview: message.text?.slice(0, 80),
     });
+
+    // ── Concurrency guard ─────────────────────────────────────────────────
+    // Reject a second message from the same user while the first is still
+    // being processed. This prevents "Lịch thuế" + "Tính thuế" from both
+    // flying through the engine in parallel and overlapping in the chat.
+    const userKey = `${message.channel}:${message.userId}`;
+    if (this.processingUsers.has(userKey)) {
+      logger.info('Concurrent request blocked for user', { requestId, userKey });
+      await this.sendReply(message, {
+        text: '⏳ Đang xử lý tin nhắn trước, vui lòng đợi giây lát...',
+      });
+      return;
+    }
+    this.processingUsers.add(userKey);
 
     try {
       // ── 1. Session (single Redis GET) ─────────────────────────────────
@@ -115,9 +131,12 @@ export class MessageRouter {
       }
 
       // 3. Check if user input is a suggestion choice
+      // NOTE: 'completed' is excluded — it's a legacy step meaning step 1 is done.
+      // Users at 'completed' should be able to use the service freely; the engine
+      // no longer intercepts them for step 2 onboarding.
       const ONBOARDING_ACTIVE_STEPS = new Set([
         'new', 'collecting_type', 'collecting_info',
-        'completed', 'collecting_tax_period', 'collecting_employees'
+        'collecting_tax_period', 'collecting_employees'
       ]);
       const isInOnboarding = ONBOARDING_ACTIVE_STEPS.has(customerProfile?.onboardingStep ?? '');
 
@@ -230,6 +249,8 @@ export class MessageRouter {
         messagePreview: message.text?.slice(0, 80),
       });
       await this.sendReply(message, { text: this.getErrorMessage(error, errorMsg) });
+    } finally {
+      this.processingUsers.delete(userKey);
     }
   }
 

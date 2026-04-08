@@ -130,6 +130,17 @@ export class TelegramAdapter implements ChannelAdapter {
       const chatId = ctx.chat?.id;
       const text = 'text' in ctx.message ? ctx.message.text : '[non-text message]';
 
+      // Send "typing..." immediately so the user sees feedback right away.
+      // Telegram's typing indicator auto-expires after ~5 s, so we refresh
+      // it every 4 s while the message is being processed.
+      let typingInterval: ReturnType<typeof setInterval> | null = null;
+      if (chatId) {
+        ctx.telegram.sendChatAction(chatId, 'typing').catch(() => {});
+        typingInterval = setInterval(() => {
+          ctx.telegram.sendChatAction(chatId, 'typing').catch(() => {});
+        }, 4000);
+      }
+
       try {
         logger.debug('Received Telegram message', {
           messageId,
@@ -137,7 +148,7 @@ export class TelegramAdapter implements ChannelAdapter {
           chatId,
           textPreview: typeof text === 'string' ? text.slice(0, 100) : text,
         });
-        
+
         const message = mapTelegramMessage(ctx);
         if (message && this.messageHandler) {
           await this.messageHandler(message);
@@ -167,22 +178,32 @@ export class TelegramAdapter implements ChannelAdapter {
             chatId,
           });
         }
+      } finally {
+        if (typingInterval) clearInterval(typingInterval);
       }
     });
 
     // ── Inline keyboard button clicks ─────────────────────────────────────
     this.bot.on('callback_query', async (ctx) => {
       this.lastUpdateTime = Date.now();
+      // Answer the callback query immediately to remove the loading spinner
+      // on the button, then send a typing indicator while we process.
+      await ctx.answerCbQuery().catch(() => {});
+
+      const cbQuery = ctx.callbackQuery;
+      if (!('data' in cbQuery) || !cbQuery.data) return;
+
+      const from = cbQuery.from;
+      const chatId = cbQuery.message?.chat?.id;
+      if (!chatId) return;
+
+      // Typing indicator — start immediately and refresh every 4 s.
+      ctx.telegram.sendChatAction(chatId, 'typing').catch(() => {});
+      const typingInterval = setInterval(() => {
+        ctx.telegram.sendChatAction(chatId, 'typing').catch(() => {});
+      }, 4000);
+
       try {
-        await ctx.answerCbQuery();
-
-        const cbQuery = ctx.callbackQuery;
-        if (!('data' in cbQuery) || !cbQuery.data) return;
-
-        const from = cbQuery.from;
-        const chatId = cbQuery.message?.chat?.id;
-        if (!chatId) return;
-
         const firstName = from.first_name || undefined;
         const lastName = from.last_name || undefined;
         const telegramUsername = from.username || undefined;
@@ -206,6 +227,8 @@ export class TelegramAdapter implements ChannelAdapter {
         }
       } catch (error) {
         logger.error('Error processing Telegram callback query', { error });
+      } finally {
+        clearInterval(typingInterval);
       }
     });
 
