@@ -23,10 +23,19 @@ async function bootstrap(): Promise<void> {
 
   // === Initialize Tax Engine gRPC client ===
   const taxEngine = new TaxEngineClient();
-  try {
-    await taxEngine.connect();
-  } catch (error) {
-    logger.warn('Tax Engine not available at startup, will retry on first request', { error });
+  let connected = false;
+  for (let i = 0; i < 6; i++) {
+    try {
+      await taxEngine.connect(10000); // 10s per attempt
+      connected = true;
+      break;
+    } catch {
+      logger.warn(`gRPC connect attempt ${i + 1}/6 failed, retrying...`);
+      await new Promise(r => setTimeout(r, 5000));
+    }
+  }
+  if (!connected) {
+    logger.error('Tax Engine not reachable after 6 attempts - continuing anyway');
   }
 
   // === Initialize channel adapters ===
