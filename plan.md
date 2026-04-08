@@ -209,6 +209,66 @@ hay cần hỗ trợ khác?"
 [completed] → Hoàn thành dịch vụ
 ```
 
+### 3.3 Kiến trúc Intent Classifier
+1. Intents (13 loại)
+Intent	Mô tả	Ví dụ
+TAX_CALCULATE	Yêu cầu tính thuế	"tính thuế GTGT 500 triệu"
+TAX_INFO	Hỏi thông tin thuế	"thuế TNDN là gì?"
+TAX_DEADLINE	Hỏi hạn nộp	"hạn nộp thuế quý 2"
+TAX_PROCEDURE	Hỏi thủ tục/quy trình	"thủ tục đăng ký MST"
+DOCUMENT_CHECK	Kiểm tra hóa đơn	"kiểm tra hóa đơn"
+DOCUMENT_UPLOAD	Upload tài liệu	(chỉ khai báo, không có pattern)
+DECLARATION	Kê khai thuế	"kê khai thuế quý 1"
+REGISTRATION	Đăng ký thuế/MST	"đăng ký mã số thuế"
+PENALTY	Phạt/vi phạm	"mức phạt chậm nộp"
+DISPUTE	Khiếu nại	(chỉ khai báo, không có pattern)
+GREETING	Chào hỏi	"xin chào"
+HELP	Trợ giúp	"giúp tôi", "help"
+UNKNOWN	Không xác định	—
+
+3. Flow phân loại (classify() — line 137)
+Input: "tính thuế TNCN lương 30 triệu 2 người phụ thuộc"
+                    │
+                    ▼
+    ┌──────────────────────────────┐
+    │  1. Keyword Pattern Matching │  ← _INTENT_PATTERNS (line 53-101)
+    │     Loop qua tất cả intents  │
+    │     Score = số pattern match  │
+    │     Compound pattern ".*" = 2x│
+    │     → intent = highest score  │
+    └──────────────┬───────────────┘
+                    │  intent=TAX_CALCULATE, score=1.0
+                    ▼
+    ┌──────────────────────────────┐
+    │  2. Tax Category Detection   │  ← _CATEGORY_PATTERNS (line 103-117)
+    │     VAT / CIT / PIT / LICENSE│
+    │     → first match wins       │
+    └──────────────┬───────────────┘
+                    │  tax_category=PIT (vì "lương", "tncn")
+                    ▼
+    ┌──────────────────────────────┐
+    │  3. Entity Extraction        │  ← _extract_entities (line 210)
+    │     - Số tiền (tỷ/triệu/...)│
+    │     - Số người phụ thuộc     │
+    │     - NLP module nếu có      │
+    └──────────────┬───────────────┘
+                    │  entities={amount: 30_000_000, dependents: 2}
+                    ▼
+    ┌──────────────────────────────┐
+    │  4. Fallback Promotion       │  (line 171-182)
+    │     Nếu UNKNOWN nhưng có     │
+    │     tax_category hoặc "thuế" │
+    │     → promote lên TAX_INFO   │
+    └──────────────┬───────────────┘
+                    │
+                    ▼
+    ClassificationResult(
+      intent=TAX_CALCULATE,
+      tax_category=PIT,
+      confidence=0.65,
+      entities={amount: 30M, dependents: 2}
+    )
+
 ---
 
 ## 4. Thay đổi cần thực hiện (Chi tiết code changes)

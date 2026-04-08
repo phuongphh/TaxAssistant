@@ -68,3 +68,13 @@ class TaxRule(ABC):
     def get_info(self, customer_type: CustomerType) -> str:
         """Return general information about this tax type for the given customer."""
         ...
+
+    def get_consultation(
+        self, customer_type: CustomerType, entities: dict | None = None,
+    ) -> str:
+        """Return a detailed consultation response, contextualised by entities.
+
+        Override in subclasses to provide richer, situation-aware advice.
+        Falls back to ``get_info`` when not overridden.
+        """
+        return self.get_info(customer_type)

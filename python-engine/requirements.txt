@@ -23,7 +23,7 @@ langchain-community==0.2.5
 
 # === Vector Store / RAG ===
 chromadb==0.5.0
-sentence-transformers==3.0.0
+voyageai>=0.2.3
 
 # === NLP Vietnamese ===
 underthesea==6.8.4
@@ -34,11 +34,21 @@ Pillow==10.3.0
 pdf2image==1.17.0
 pytesseract==0.3.10
 
+# === Scheduler ===
+apscheduler==3.10.4
+
 # === Utilities ===
 pydantic==2.7.4
 pydantic-settings==2.3.4
 httpx==0.27.0
 python-dotenv==1.0.1
+beautifulsoup4==4.12.3
+
+# === Portal ===
+jinja2==3.1.4
+itsdangerous==2.2.0
+passlib[bcrypt]==1.7.4
+bcrypt==4.1.3
 
 # === Dev / Testing ===
 pytest==8.2.2

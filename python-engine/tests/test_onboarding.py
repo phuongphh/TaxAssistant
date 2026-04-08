@@ -23,6 +23,21 @@ class TestWelcomeStep:
         assert result["next_step"] == "collecting_type"
         assert not result["onboarding_complete"]
 
+    def test_welcome_with_first_name(self, handler):
+        customer = {"onboarding_step": "new", "first_name": "Minh"}
+        result = handler.process_step(customer, "hi")
+        assert "Minh" in result["reply"]
+
+    def test_welcome_with_username_when_no_first_name(self, handler):
+        customer = {"onboarding_step": "new", "username": "minhbiz"}
+        result = handler.process_step(customer, "hi")
+        assert "minhbiz" in result["reply"]
+
+    def test_welcome_with_display_name(self, handler):
+        customer = {"onboarding_step": "new", "display_name": "Nguyen Van A"}
+        result = handler.process_step(customer, "hi")
+        assert "Nguyen Van A" in result["reply"]
+
     def test_welcome_has_quick_replies(self, handler):
         customer = {"onboarding_step": "new"}
         result = handler.process_step(customer, "hi")
@@ -121,6 +136,21 @@ class TestCompletedStep:
         assert "Dịch vụ của chúng tôi" in result["reply"]
         assert not result["onboarding_complete"]
 
+    def test_returning_customer_greeted_by_first_name(self, handler):
+        customer = {"onboarding_step": "completed", "first_name": "An", "business_name": "ABC Corp"}
+        result = handler.process_step(customer, "xin chào")
+        assert "An" in result["reply"]
+
+    def test_returning_customer_greeted_by_username_when_no_first_name(self, handler):
+        customer = {"onboarding_step": "completed", "username": "ankd123"}
+        result = handler.process_step(customer, "xin chào")
+        assert "ankd123" in result["reply"]
+
+    def test_returning_customer_missing_username_and_name(self, handler):
+        customer = {"onboarding_step": "completed"}
+        result = handler.process_step(customer, "xin chào")
+        assert "Chào bạn" in result["reply"]
+
 
 # ---- Service selection parsing ----
 
@@ -129,8 +159,8 @@ class TestServiceSelection:
         ("1", "tax_calculation"),
         ("2", "tax_declaration"),
         ("3", "tax_registration"),
-        ("4", "tax_consultation"),
-        ("5", "invoice_check"),
+        ("4", "invoice_check"),
+        ("5", "tax_consultation"),
         ("6", "penalty_consultation"),
         ("7", "tax_refund"),
         ("8", "annual_settlement"),

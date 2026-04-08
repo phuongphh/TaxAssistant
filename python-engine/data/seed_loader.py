@@ -6,10 +6,11 @@ Loads JSON seed files into:
 2. ChromaDB vector store - for RAG retrieval
 
 Usage:
-    python -m data.seed_loader          # Load all seed files
-    python -m data.seed_loader --dry-run  # Preview without writing
-    python -m data.seed_loader --vector-only  # Only index into ChromaDB
+    python -m data.seed_loader               # Load all seed files
+    python -m data.seed_loader --dry-run     # Preview without writing
+    python -m data.seed_loader --vector-only # Only index into ChromaDB
     python -m data.seed_loader --db-only     # Only insert into PostgreSQL
+    python -m data.seed_loader --reset-vector # Delete & recreate ChromaDB collection first (use when switching embedding models)
 """
 
 import asyncio
@@ -103,13 +104,16 @@ async def seed_database(documents: list[dict]) -> int:
     return inserted
 
 
-async def seed_vector_store(documents: list[dict]) -> int:
+async def seed_vector_store(documents: list[dict], reset: bool = False) -> int:
     """Index regulation documents into ChromaDB for RAG retrieval."""
     from app.ai.embeddings import EmbeddingService
     from app.ai.llm_client import LLMClient
     from app.ai.rag_service import RAGService
 
     embedding_service = EmbeddingService()
+    if reset:
+        embedding_service.reset_collection()
+
     llm_client = LLMClient()
     rag_service = RAGService(embedding_service, llm_client)
 
@@ -179,6 +183,7 @@ async def main() -> None:
     dry_run = "--dry-run" in args
     vector_only = "--vector-only" in args
     db_only = "--db-only" in args
+    reset_vector = "--reset-vector" in args
 
     logger.info("Starting seed loader...")
     documents = load_seed_files()
@@ -209,7 +214,7 @@ async def main() -> None:
     # Seed ChromaDB
     if not db_only:
         try:
-            vec_count = await seed_vector_store(documents)
+            vec_count = await seed_vector_store(documents, reset=reset_vector)
             logger.info("ChromaDB: %d documents indexed", vec_count)
         except Exception:
             logger.exception("Failed to seed ChromaDB vector store")

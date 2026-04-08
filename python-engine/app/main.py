@@ -11,9 +11,15 @@ import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from pathlib import Path
+
+from fastapi.staticfiles import StaticFiles
+
 from app.config import settings
-from app.api.routes import health, tax
+from app.api.routes import health, tax, portal, notifications
 from app.grpc_server import serve_grpc
+
+PORTAL_DIR = Path(__file__).resolve().parent / "portal"
 
 logging.basicConfig(
     level=logging.DEBUG if settings.debug else logging.INFO,
@@ -43,6 +49,15 @@ def create_app() -> FastAPI:
     # Routes
     app.include_router(health.router)
     app.include_router(tax.router)
+    app.include_router(portal.router)
+    app.include_router(notifications.router)
+
+    # Serve portal static files (CSS, JS)
+    app.mount(
+        "/portal/static",
+        StaticFiles(directory=str(PORTAL_DIR / "static")),
+        name="portal-static",
+    )
 
     return app
 
@@ -63,6 +78,20 @@ async def main() -> None:
 
     # Start gRPC server
     grpc_server = await serve_grpc()
+
+    # Start tax regulation update scheduler (background task)
+    try:
+        from data.scheduler import tax_scheduler
+        tax_scheduler.start()
+    except Exception:
+        logger.warning("Tax update scheduler failed to start", exc_info=True)
+
+    # Start notification scheduler (APScheduler)
+    try:
+        from app.services.notification_scheduler import notification_scheduler
+        notification_scheduler.start()
+    except Exception:
+        logger.warning("Notification scheduler failed to start", exc_info=True)
 
     # Setup shutdown
     shutdown_event = asyncio.Event()
@@ -91,6 +120,21 @@ async def main() -> None:
     async def wait_shutdown():
         await shutdown_event.wait()
         logger.info("Shutting down servers...")
+
+        # Stop tax scheduler
+        try:
+            from data.scheduler import tax_scheduler
+            await tax_scheduler.stop()
+        except Exception:
+            pass
+
+        # Stop notification scheduler
+        try:
+            from app.services.notification_scheduler import notification_scheduler
+            await notification_scheduler.shutdown()
+        except Exception:
+            pass
+
         await grpc_server.stop(grace=5)
         rest_server.should_exit = True
 

@@ -1,0 +1,45 @@
+{
+  "_description": "Configurable tax parameters. Updated by scraper or manually. Tax rules load these values at startup, falling back to hardcoded defaults if this file is missing.",
+  "_last_updated": "2026-03-16",
+  "_legal_basis": "Luật 109/2025/QH15, NQ 110/2025/UBTVQH15",
+  "pit": {
+    "personal_deduction": 15500000,
+    "dependent_deduction": 6200000,
+    "brackets": [
+      {"limit": 10000000, "rate": 0.05},
+      {"limit": 30000000, "rate": 0.10},
+      {"limit": 60000000, "rate": 0.20},
+      {"limit": 100000000, "rate": 0.30},
+      {"limit": null, "rate": 0.35}
+    ],
+    "legal_basis": [
+      "Luật Thuế TNCN số 109/2025/QH15",
+      "Nghị quyết 110/2025/UBTVQH15",
+      "Thông tư 111/2013/TT-BTC"
+    ]
+  },
+  "vat": {
+    "rate_standard": 0.10,
+    "rate_reduced": 0.05,
+    "rate_zero": 0.0,
+    "rate_special_reduced": 0.08,
+    "registration_threshold": 100000000
+  },
+  "cit": {
+    "rate_standard": 0.20,
+    "rate_small": 0.17,
+    "revenue_threshold_simplified": 100000000
+  },
+  "license_tax": {
+    "enterprise_tiers": [
+      {"capital_threshold": 10000000000, "amount": 3000000},
+      {"capital_threshold": 0, "amount": 2000000}
+    ],
+    "household_tiers": [
+      {"revenue_threshold": 500000000, "amount": 1000000},
+      {"revenue_threshold": 300000000, "amount": 500000},
+      {"revenue_threshold": 100000000, "amount": 300000},
+      {"revenue_threshold": 0, "amount": 0}
+    ]
+  }
+}

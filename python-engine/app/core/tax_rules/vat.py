@@ -9,15 +9,20 @@ Key references:
 
 from .base import CustomerType, TaxCategory, TaxContext, TaxResult, TaxRule
 
+# --- Load VAT parameters from config (with hardcoded fallbacks) ---
+try:
+    from data.tax_config_loader import tax_config as _cfg
+    VAT_RATE_STANDARD: float = _cfg.vat_rate_standard
+    VAT_RATE_REDUCED: float = _cfg.vat_rate_reduced
+    VAT_RATE_SPECIAL_REDUCED: float = _cfg.vat_rate_special_reduced
+    VAT_REGISTRATION_THRESHOLD: int = _cfg.vat_registration_threshold
+except Exception:
+    VAT_RATE_STANDARD = 0.10
+    VAT_RATE_REDUCED = 0.05
+    VAT_RATE_SPECIAL_REDUCED = 0.08
+    VAT_REGISTRATION_THRESHOLD = 100_000_000
 
-# VAT rates in Vietnam
-VAT_RATE_STANDARD = 0.10  # 10% - Thuế suất phổ thông
-VAT_RATE_REDUCED = 0.05  # 5% - Thuế suất ưu đãi
-VAT_RATE_ZERO = 0.0  # 0% - Hàng xuất khẩu
-VAT_RATE_SPECIAL_REDUCED = 0.08  # 8% - Giảm thuế theo NQ 43/2022
-
-# Revenue threshold for VAT registration (100 triệu VND/năm)
-VAT_REGISTRATION_THRESHOLD = 100_000_000
+VAT_RATE_ZERO = 0.0  # 0% - Hàng xuất khẩu (always zero)
 
 
 class VATRule(TaxRule):
@@ -129,3 +134,67 @@ class VATRule(TaxRule):
             "• Thuế suất ưu đãi: 5% (một số hàng hóa, dịch vụ)\n"
             "• Kê khai: Hàng tháng (doanh thu > 50 tỷ) hoặc hàng quý"
         )
+
+    def get_consultation(
+        self, customer_type: CustomerType, entities: dict | None = None,
+    ) -> str:
+        is_household = customer_type in (
+            CustomerType.HOUSEHOLD, CustomerType.INDIVIDUAL,
+        )
+
+        lines = ["Tư vấn Thuế Giá trị gia tăng (GTGT):\n"]
+
+        # --- 1. Phương pháp tính ---
+        lines.append("1. Phương pháp tính thuế:")
+        if is_household:
+            lines.append("   • Phương pháp trực tiếp trên doanh thu")
+            lines.append("   • Thuế GTGT = Doanh thu × Tỷ lệ GTGT")
+            lines.append("   • Tỷ lệ theo ngành:")
+            lines.append("     - Phân phối, bán hàng: 1%")
+            lines.append("     - Sản xuất, vận tải: 3%")
+            lines.append("     - Dịch vụ, xây dựng: 5%")
+            lines.append("     - Hoạt động khác: 2%")
+        else:
+            lines.append("   • Phương pháp khấu trừ:")
+            lines.append("     Thuế GTGT phải nộp = Thuế đầu ra - Thuế đầu vào")
+            lines.append(f"   • Thuế suất phổ thông: {VAT_RATE_STANDARD * 100:.0f}%")
+            lines.append(f"   • Thuế suất ưu đãi: {VAT_RATE_REDUCED * 100:.0f}% "
+                         "(lương thực, nước sạch, thiết bị y tế, giáo dục...)")
+            lines.append("   • Thuế suất 0%: Hàng xuất khẩu, vận tải quốc tế")
+
+        # --- 2. Ngưỡng & điều kiện ---
+        lines.append("\n2. Ngưỡng & Điều kiện:")
+        if is_household:
+            lines.append(
+                f"   • Doanh thu ≤ {VAT_REGISTRATION_THRESHOLD / 1e6:.0f} triệu/năm: "
+                "Không phải nộp thuế GTGT"
+            )
+            lines.append(
+                f"   • Doanh thu > {VAT_REGISTRATION_THRESHOLD / 1e6:.0f} triệu/năm: "
+                "Phải kê khai và nộp thuế GTGT"
+            )
+        else:
+            lines.append("   • DN mới thành lập: đăng ký phương pháp khấu trừ hoặc trực tiếp")
+            lines.append("   • Điều kiện khấu trừ: có hóa đơn GTGT hợp lệ, thanh toán qua NH"
+                         " (≥ 20 triệu)")
+
+        # --- 3. Kê khai ---
+        lines.append("\n3. Kê khai:")
+        if is_household:
+            lines.append("   • Hàng quý hoặc theo từng lần phát sinh")
+            lines.append("   • Hạn nộp: Ngày cuối tháng đầu quý sau")
+        else:
+            lines.append("   • Doanh thu > 50 tỷ/năm: Kê khai hàng tháng (hạn ngày 20 tháng sau)")
+            lines.append("   • Doanh thu ≤ 50 tỷ/năm: Kê khai hàng quý (hạn ngày cuối tháng đầu quý sau)")
+
+        # --- 4. Căn cứ pháp lý ---
+        lines.append("\n4. Căn cứ pháp lý:")
+        lines.append("   • Luật Thuế GTGT số 13/2008/QH12 (sửa đổi, bổ sung)")
+        lines.append("   • Thông tư 219/2013/TT-BTC")
+        lines.append("   • Nghị định 123/2020/NĐ-CP (hóa đơn, chứng từ)")
+
+        lines.append(
+            "\n💡 Để tính thuế cụ thể, bạn có thể cung cấp doanh thu. "
+            "VD: \"thuế GTGT doanh thu 500 triệu\""
+        )
+        return "\n".join(lines)

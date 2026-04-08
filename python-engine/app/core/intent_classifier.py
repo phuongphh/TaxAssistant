@@ -35,6 +35,10 @@ class Intent(str, Enum):
     PENALTY = "penalty"  # Phạt, vi phạm thuế
     DISPUTE = "dispute"  # Khiếu nại, tranh chấp
 
+    # Profile management
+    PROFILE = "profile"              # Xem thông tin cá nhân
+    PROFILE_EDIT = "profile_edit"    # Sửa thông tin cá nhân
+
     # General
     GREETING = "greeting"
     HELP = "help"
@@ -60,6 +64,12 @@ _INTENT_PATTERNS: list[tuple[Intent, list[str]]] = [
         r"thuế suất", r"quy định .+ thuế", r"luật thuế", r"nghị định",
         r"về thuế", r"thuế gtgt\b", r"thuế tndn\b", r"thuế tncn\b",
         r"tra cứu",
+        # Full-form tax names (users often write these out, not abbreviations)
+        r"thuế thu nhập cá nhân", r"thuế thu nhập doanh nghiệp",
+        r"thuế giá trị gia tăng", r"thuế môn bài",
+        # Consultation / advisory keywords
+        r"tư vấn.*thuế", r"tư vấn.*thu nhập", r"tư vấn.*kê khai",
+        r"tư vấn.*đăng ký", r"tư vấn.*hóa đơn", r"tư vấn",
     ]),
     (Intent.TAX_DEADLINE, [
         r"hạn nộp", r"thời hạn", r"deadline", r"khi nào nộp",
@@ -85,6 +95,13 @@ _INTENT_PATTERNS: list[tuple[Intent, list[str]]] = [
     (Intent.PENALTY, [
         r"phạt", r"vi phạm", r"chậm nộp", r"trốn thuế",
         r"xử phạt", r"tiền phạt",
+    ]),
+    (Intent.PROFILE_EDIT, [
+        r"(?:đổi|thay đổi|cập nhật|update|sửa|chỉnh sửa|edit)\s+.+\s+(?:thành|sang|là)\s+",
+    ]),
+    (Intent.PROFILE, [
+        r"thông tin của tôi", r"hồ sơ của tôi", r"xem profile",
+        r"^/profile\b", r"profile của tôi", r"thông tin cá nhân",
     ]),
     (Intent.GREETING, [
         r"^(xin )?chào", r"^hello", r"^hi\b", r"^hey",
@@ -151,6 +168,29 @@ class IntentClassifier:
 
         # Extract numeric entities
         entities = self._extract_entities(text_lower)
+
+        # --- Fallback promotion ---
+        # When no intent pattern matched but we DID detect a tax category
+        # or tax-related context, the user is almost certainly asking about
+        # tax — promote to TAX_INFO so the engine routes to RAG/LLM
+        # instead of returning the generic service menu.
+        #
+        # Examples that benefit:
+        #   "thuế TNCN hộ gia đình có 2 người phụ thuộc doanh thu 500 triệu"
+        #   "thu nhập cá nhân cho hộ kinh doanh"
+        #   "GTGT mới thành lập"
+        if intent == Intent.UNKNOWN:
+            has_tax_context = (
+                tax_category is not None
+                or bool(re.search(r"\bthuế\b", text_lower))
+            )
+            if has_tax_context:
+                intent = Intent.TAX_INFO
+                best_score = max(best_score, 0.5)
+                logger.debug(
+                    "Promoted UNKNOWN → TAX_INFO (tax_category=%s, text='%s')",
+                    tax_category, text_lower[:60],
+                )
 
         # Normalize confidence: 1 match → 0.6, 2 → 0.75, 3+ → 0.85+
         confidence = min(0.5 + best_score * 0.15, 0.95) if intent != Intent.UNKNOWN else 0.3

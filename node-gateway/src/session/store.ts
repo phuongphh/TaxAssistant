@@ -7,6 +7,10 @@ export interface CustomerProfile {
   customerId: string;
   channel: string;
   channelUserId: string;
+  username: string;
+  firstName: string;
+  lastName: string;
+  displayName: string;
   customerType: string;
   businessName: string;
   taxCode: string;
@@ -17,6 +21,8 @@ export interface CustomerProfile {
   onboardingStep: string;
   taxProfile: Record<string, string>;
   recentNotes: string[];
+  taxPeriod: string;
+  hasEmployees: string;
 }
 
 export interface ActiveCase {
@@ -26,6 +32,13 @@ export interface ActiveCase {
   title: string;
   status: string;
   currentStep: string;
+}
+
+export interface Suggestion {
+  id: number;
+  text: string;
+  action: string;
+  context: string;
 }
 
 export interface SessionData {
@@ -39,6 +52,9 @@ export interface SessionData {
   lastActiveAt: string;
   customerId?: string;
   customerProfile?: CustomerProfile;
+  // Context-aware suggestions support
+  currentContext?: 'tax-calculation' | 'deadline-info' | 'legal-doc' | 'tax-registration' | 'declaration-guide' | 'general';
+  pendingSuggestions?: Suggestion[];
 }
 
 export interface ConversationEntry {

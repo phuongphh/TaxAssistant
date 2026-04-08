@@ -37,19 +37,19 @@ service TaxEngine {
 enum CustomerType {
   CUSTOMER_TYPE_UNSPECIFIED = 0;
   SME = 1;              // Small and Medium Enterprise
-  HOUSEHOLD = 2;        // Hộ gia đình
-  INDIVIDUAL = 3;       // Cá thể kinh doanh
+  HOUSEHOLD = 2;        // Ho gia dinh
+  INDIVIDUAL = 3;       // Ca the kinh doanh
 }
 
 enum TaxCategory {
   TAX_CATEGORY_UNSPECIFIED = 0;
-  VAT = 1;              // Thuế GTGT
-  CIT = 2;              // Thuế TNDN (Corporate Income Tax)
-  PIT = 3;              // Thuế TNCN (Personal Income Tax)
-  SPECIAL_CONSUMPTION = 4; // Thuế tiêu thụ đặc biệt
-  IMPORT_EXPORT = 5;    // Thuế xuất nhập khẩu
-  LICENSE = 6;          // Thuế môn bài
-  ENVIRONMENT = 7;      // Thuế bảo vệ môi trường
+  VAT = 1;              // Thue GTGT
+  CIT = 2;              // Thue TNDN (Corporate Income Tax)
+  PIT = 3;              // Thue TNCN (Personal Income Tax)
+  SPECIAL_CONSUMPTION = 4; // Thue tieu thu dac biet
+  IMPORT_EXPORT = 5;    // Thue xuat nhap khau
+  LICENSE = 6;          // Thue mon bai
+  ENVIRONMENT = 7;      // Thue bao ve moi truong
 }
 
 message SessionContext {
@@ -113,7 +113,7 @@ message SuggestedAction {
 }
 
 message TaxReference {
-  string title = 1;             // e.g., "Nghị định 123/2020/NĐ-CP"
+  string title = 1;
   string url = 2;
   string snippet = 3;
 }
@@ -135,7 +135,7 @@ message RegulationResponse {
 }
 
 message Regulation {
-  string document_number = 1;   // e.g., "Thông tư 78/2021/TT-BTC"
+  string document_number = 1;
   string title = 2;
   string content = 3;
   string effective_date = 4;
@@ -177,14 +177,30 @@ message CustomerProfileMsg {
   string province = 8;
   string annual_revenue_range = 9;
   string employee_count_range = 10;
-  string onboarding_step = 11;     // "new" | "collecting_type" | "collecting_info" | "completed"
+  string onboarding_step = 11;     // "new" | "collecting_type" | "collecting_info" | "completed" | "collecting_tax_period" | "collecting_employees" | "onboarding_done"
   map<string, string> tax_profile = 12;
+  string tax_period = 22;          // "monthly" | "quarterly" | "flat_tax" | ""
+  string has_employees = 23;       // "true" | "false" | "" (string for proto compat)
   repeated string recent_notes = 13;
+  // Telegram/platform identity fields
+  string username = 14;            // @username (may be empty)
+  string first_name = 15;
+  string last_name = 16;
+  string display_name = 17;        // Computed: first_name + last_name or @username
+  // Contact and extended profile fields
+  string email = 18;
+  string phone = 19;
+  string address = 20;
+  map<string, string> profile_data = 21;  // Dynamic fields per business type
 }
 
 message CustomerLookup {
   string channel = 1;
   string channel_user_id = 2;
+  // Optional identity info from platform (saved on first message)
+  string username = 3;
+  string first_name = 4;
+  string last_name = 5;
 }
 
 message CustomerProfileUpdate {

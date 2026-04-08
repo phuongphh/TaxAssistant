@@ -10,6 +10,8 @@ from typing import TYPE_CHECKING
 
 from app.core.intent_classifier import ClassificationResult, Intent, IntentClassifier
 from app.core.onboarding import OnboardingHandler
+from app.core.profile_handler import ProfileHandler
+from app.core.suggestions import generate_suggestions
 from app.core.tax_rules.base import CustomerType, TaxCategory, TaxContext, TaxResult
 from app.core.tax_rules.cit import CITRule
 from app.core.tax_rules.license_tax import LicenseTaxRule
@@ -36,6 +38,7 @@ class TaxEngine:
     def __init__(self, rag_service: RAGService | None = None) -> None:
         self.classifier = IntentClassifier()
         self.rag = rag_service
+        self.profile_handler = ProfileHandler()
 
         # Register tax rules
         self.tax_rules = {
@@ -52,6 +55,7 @@ class TaxEngine:
         session_context: dict | None = None,
         conversation_history: list[dict] | None = None,
         memory_context: str = "",
+        customer_profile: dict | None = None,
     ) -> dict:
         """
         Process a tax-related message and return a response.
@@ -60,6 +64,7 @@ class TaxEngine:
             conversation_history: List of {"role": "user"|"assistant", "content": str}
                 from previous turns in this session.
             memory_context: Long-term memory context string to inject into LLM prompts.
+            customer_profile: Customer profile dict for profile management features.
 
         Returns:
             dict with keys: reply, actions, references, confidence, category
@@ -72,8 +77,15 @@ class TaxEngine:
         # intercepting full natural-language questions that happen to contain
         # keywords like "kê khai" or "tính thuế".
         msg_stripped = message.strip()
-        if msg_stripped in ("1", "2", "3", "4", "5", "6", "7", "8"):
+        if msg_stripped in ("1", "2", "3", "4", "5", "6", "7", "8", "9"):
             service_type = OnboardingHandler.parse_service_selection(msg_stripped)
+            if service_type == "profile":
+                # Route to profile view
+                classification = ClassificationResult(
+                    intent=Intent.PROFILE, tax_category=None,
+                    confidence=1.0, extracted_entities={},
+                )
+                return self._handle_profile("thông tin của tôi", classification, customer_profile or {})
             if service_type:
                 return self._route_service_selection(service_type, ct, memory_context)
 
@@ -102,6 +114,9 @@ class TaxEngine:
                 reply=self._get_help_text(ct),
                 classification=classification,
             )
+
+        if classification.intent in (Intent.PROFILE, Intent.PROFILE_EDIT):
+            return self._handle_profile(message, classification, customer_profile or {})
 
         # When conversation history exists, route follow-up messages through
         # LLM so the model can reference previous turns (e.g. "tôi là hộ kinh
@@ -367,7 +382,31 @@ class TaxEngine:
 
         # Fallback to hardcoded rule info
         if category and category in self.tax_rules:
-            info = self.tax_rules[category].get_info(customer_type)
+            rule = self.tax_rules[category]
+            entities = classification.extracted_entities
+
+            # When the user provided concrete numbers (income/revenue,
+            # dependents, etc.) we can go beyond generic info and give a
+            # personalised consultation by running the tax calculation.
+            if entities.get("amount"):
+                context = TaxContext(
+                    customer_type=customer_type,
+                    revenue=entities.get("amount"),
+                    income=entities.get("amount"),
+                    extra=entities,
+                )
+                result = rule.calculate(context)
+                references = [
+                    {"title": ref, "url": "", "snippet": ""}
+                    for ref in result.legal_basis
+                ]
+                return self._build_response(
+                    reply=result.explanation,
+                    classification=classification,
+                    references=references,
+                )
+
+            info = rule.get_consultation(customer_type, entities)
             return self._build_response(reply=info, classification=classification)
 
         overview = self._get_tax_overview(customer_type)
@@ -765,6 +804,8 @@ class TaxEngine:
         Uses memory_context to show customer info even when LLM is unavailable,
         proving to the user that the bot remembers them.
         """
+        from app.core.onboarding import SERVICE_MENU
+
         type_label = {
             CustomerType.SME: "Doanh nghiệp",
             CustomerType.HOUSEHOLD: "Hộ kinh doanh",
@@ -788,11 +829,7 @@ class TaxEngine:
 
         reply = (
             f"{greeting}Tôi có thể hỗ trợ bạn các dịch vụ sau:\n\n"
-            "1. Tính thuế (GTGT, TNDN, TNCN, Môn bài)\n"
-            "2. Hướng dẫn kê khai & quyết toán thuế\n"
-            "3. Tra cứu quy định & văn bản pháp luật\n"
-            "4. Hạn nộp thuế\n"
-            "5. Thủ tục đăng ký mã số thuế\n\n"
+            f"{SERVICE_MENU}\n\n"
             "Bạn có thể gõ số hoặc mô tả câu hỏi cụ thể, ví dụ:\n"
             '• "Tính thuế GTGT doanh thu 500 triệu"\n'
             '• "Thuế TNCN lương 30 triệu 2 người phụ thuộc"\n'
@@ -810,7 +847,29 @@ class TaxEngine:
             ],
         )
 
+    def _handle_profile(
+        self, message: str, classification: ClassificationResult,
+        customer_profile: dict,
+    ) -> dict:
+        """Handle profile view and edit requests."""
+        if classification.intent == Intent.PROFILE_EDIT:
+            result = self.profile_handler.edit_profile(customer_profile, message)
+        else:
+            result = self.profile_handler.view_profile(customer_profile)
+
+        response = self._build_response(
+            reply=result["reply"],
+            classification=classification,
+            actions=result.get("actions", []),
+        )
+        # Pass update_fields through so the gRPC server can persist them
+        if result.get("update_fields"):
+            response["update_fields"] = result["update_fields"]
+        return response
+
     def _get_greeting(self, customer_type: CustomerType) -> str:
+        from app.core.onboarding import SERVICE_MENU
+
         type_label = {
             CustomerType.SME: " (Doanh nghiệp)",
             CustomerType.HOUSEHOLD: " (Hộ gia đình)",
@@ -819,11 +878,7 @@ class TaxEngine:
 
         return (
             f"Xin chào{type_label}! Tôi là Trợ lý Thuế ảo.\n\n"
-            "Tôi có thể hỗ trợ bạn:\n"
-            "• Tính thuế (GTGT, TNDN, TNCN, Môn bài)\n"
-            "• Tra cứu quy định thuế\n"
-            "• Hướng dẫn thủ tục kê khai\n"
-            "• Kiểm tra hóa đơn, chứng từ\n\n"
+            f"{SERVICE_MENU}\n\n"
             "Hãy gửi câu hỏi của bạn!"
         )
 
@@ -886,9 +941,22 @@ class TaxEngine:
         actions: list[dict] | None = None,
         references: list[dict] | None = None,
     ) -> dict:
+        if actions:
+            # Already has explicit buttons — don't add suggestion buttons
+            all_actions = actions
+        else:
+            # No buttons yet — generate context-aware suggestion buttons
+            suggestions = generate_suggestions(
+                classification.intent, classification.tax_category,
+            )
+            all_actions = [
+                {"label": s, "action_type": "quick_reply", "payload": s}
+                for s in suggestions
+            ]
+
         return {
             "reply": reply,
-            "actions": actions or [],
+            "actions": all_actions,
             "references": references or [],
             "confidence": classification.confidence,
             "category": classification.tax_category.value if classification.tax_category else "",

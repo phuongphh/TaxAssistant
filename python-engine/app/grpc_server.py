@@ -2,6 +2,7 @@
 gRPC server implementing the TaxEngine service defined in tax_service.proto.
 """
 
+import asyncio
 import logging
 import uuid as uuid_mod
 from concurrent import futures
@@ -62,6 +63,64 @@ _CUSTOMER_TYPE_MAP = {
 }
 
 
+def _auto_seed_chromadb(embedding_service) -> int:
+    """Auto-seed ChromaDB from seed JSON files if empty.
+
+    Uses EmbeddingService directly (no LLM needed) to chunk and index
+    tax regulation documents.  Returns number of documents indexed.
+    """
+    import json
+
+    seed_dir = Path(__file__).resolve().parent.parent / "data" / "seed"
+    seed_files = [
+        "vat_regulations.json",
+        "cit_regulations.json",
+        "pit_regulations.json",
+        "license_tax_regulations.json",
+        "procedure_regulations.json",
+    ]
+
+    indexed = 0
+    for filename in seed_files:
+        filepath = seed_dir / filename
+        if not filepath.exists():
+            continue
+
+        with open(filepath, encoding="utf-8") as f:
+            docs = json.load(f)
+
+        for doc in docs:
+            content = doc.get("content", "")
+            if not content:
+                continue
+
+            metadata = {
+                "document_number": doc.get("document_number", ""),
+                "title": doc.get("title", ""),
+                "category": doc.get("category", ""),
+                "effective_date": doc.get("effective_date", ""),
+                "source_url": doc.get("source_url", ""),
+            }
+
+            # Chunk text for better retrieval
+            words = content.split()
+            chunks = []
+            start = 0
+            while start < len(words):
+                end = start + 500
+                chunks.append(" ".join(words[start:end]))
+                start = end - 50
+
+            doc_id = doc.get("document_number", f"doc_{indexed}")
+            chunk_ids = [f"{doc_id}_chunk_{i}" for i in range(len(chunks))]
+            metadatas = [metadata] * len(chunks)
+
+            embedding_service.add_documents_batch(chunk_ids, chunks, metadatas)
+            indexed += 1
+
+    return indexed
+
+
 def _init_rag_service():
     """Initialize RAG service (optional, graceful fallback if unavailable)."""
     try:
@@ -72,11 +131,18 @@ def _init_rag_service():
         embedding = EmbeddingService()
         doc_count = embedding.get_document_count()
         logger.info("ChromaDB initialized: %d documents in vector store", doc_count)
+
         if doc_count == 0:
-            logger.warning(
-                "ChromaDB is EMPTY. Run seed_loader to index tax regulations: "
-                "docker compose exec tax-engine python -m data.seed_loader"
-            )
+            logger.info("ChromaDB is EMPTY — auto-seeding from seed files...")
+            try:
+                indexed = _auto_seed_chromadb(embedding)
+                doc_count = embedding.get_document_count()
+                logger.info(
+                    "Auto-seed complete: %d documents indexed (%d chunks total)",
+                    indexed, doc_count,
+                )
+            except Exception as e:
+                logger.warning("Auto-seed failed: %s: %s", type(e).__name__, e)
 
         llm = LLMClient()
         rag = RAGService(embedding, llm)
@@ -86,18 +152,40 @@ def _init_rag_service():
         logger.warning(
             "RAG service unavailable - running WITHOUT LLM/vector search. "
             "Reason: %s: %s. "
-            "Ensure ANTHROPIC_API_KEY is set in environment.",
+            "Ensure OPENAI_API_KEY or ANTHROPIC_API_KEY is set in environment.",
             type(e).__name__,
             e,
         )
         return None
 
 
-async def _ensure_tables():
-    """Create new tables if they don't exist (idempotent)."""
-    async with db_engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    logger.info("Database tables ensured")
+async def _ensure_tables(max_retries: int = 3, base_delay: float = 2.0):
+    """Create new tables if they don't exist (idempotent).
+
+    Retries with exponential backoff on transient database errors.
+    """
+    import asyncio
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            async with db_engine.begin() as conn:
+                await conn.run_sync(Base.metadata.create_all)
+            logger.info("Database tables ensured")
+            return
+        except Exception as e:
+            if attempt < max_retries:
+                delay = base_delay * (2 ** (attempt - 1))
+                logger.warning(
+                    "Database connection failed (attempt %d/%d): %s: %s — retrying in %.1fs",
+                    attempt, max_retries, type(e).__name__, e, delay,
+                )
+                await asyncio.sleep(delay)
+            else:
+                logger.error(
+                    "Database connection failed after %d attempts: %s: %s",
+                    max_retries, type(e).__name__, e,
+                )
+                raise
 
 
 class TaxEngineServicer(pb2_grpc.TaxEngineServicer):
@@ -109,9 +197,17 @@ class TaxEngineServicer(pb2_grpc.TaxEngineServicer):
         self.doc_processor = DocumentProcessor()
         self.onboarding = OnboardingHandler()
 
+    # Maximum time (seconds) for the engine to process a single message.
+    # Must be LESS than the gRPC deadline set by the gateway (180s) to
+    # guarantee we always return a response instead of letting the deadline
+    # fire silently.
+    _ENGINE_TIMEOUT = 150.0
+
     async def ProcessMessage(self, request, context):
         """Process a user's tax-related message."""
+        import asyncio
         import time
+
         start = time.monotonic()
         logger.info(
             "gRPC ProcessMessage: request_id=%s msg='%s'",
@@ -148,6 +244,15 @@ class TaxEngineServicer(pb2_grpc.TaxEngineServicer):
                     "onboarding_step": request.customer_profile.onboarding_step,
                     "tax_profile": dict(request.customer_profile.tax_profile),
                     "notes": [{"note": n} for n in request.customer_profile.recent_notes],
+                    "email": request.customer_profile.email,
+                    "phone": request.customer_profile.phone,
+                    "address": request.customer_profile.address,
+                    "profile_data": dict(request.customer_profile.profile_data),
+                    "username": request.customer_profile.username,
+                    "first_name": request.customer_profile.first_name,
+                    "display_name": request.customer_profile.display_name,
+                    "tax_period": request.customer_profile.tax_period,
+                    "has_employees": request.customer_profile.has_employees == "true" if request.customer_profile.has_employees else None,
                 }
                 # Use customer_type from profile if available
                 if customer_profile["customer_type"] and customer_profile["customer_type"] != "unknown":
@@ -177,9 +282,13 @@ class TaxEngineServicer(pb2_grpc.TaxEngineServicer):
                 request.context.session_id,
             )
 
-            # Check if customer is in onboarding flow
-            if customer_profile and customer_profile.get("onboarding_step") in ("new", "collecting_type", "collecting_info"):
-                result = await self._handle_onboarding(
+            # Check if customer is in onboarding flow (step 1 or step 2).
+            # NOTE: "completed" is a legacy state meaning step 1 is done but step 2 hasn't
+            # started yet. We intentionally exclude it here so users at that state can
+            # freely use the service without being re-routed into step 2 onboarding on
+            # every message. Step 2 is triggered separately (e.g., via notifications).
+            if customer_profile and customer_profile.get("onboarding_step") in ("new", "collecting_type", "collecting_info", "collecting_tax_period", "collecting_employees"):
+                coro = self._handle_onboarding(
                     request, customer_profile, customer_type
                 )
             else:
@@ -190,13 +299,53 @@ class TaxEngineServicer(pb2_grpc.TaxEngineServicer):
                     recent_summaries=summaries,
                 )
 
-                result = await self.engine.process_message(
+                coro = self.engine.process_message(
                     message=request.message,
                     customer_type=customer_type,
                     session_context=session_context,
                     conversation_history=conversation_history,
                     memory_context=memory_context,
+                    customer_profile=customer_profile,
                 )
+
+            # Enforce a hard timeout so we ALWAYS return a response before
+            # the gRPC deadline fires.  Without this, slow LLM/DB calls
+            # could exceed the 180s deadline and the client gets nothing.
+            try:
+                result = await asyncio.wait_for(coro, timeout=self._ENGINE_TIMEOUT)
+            except asyncio.TimeoutError:
+                elapsed = time.monotonic() - start
+                logger.error(
+                    "ProcessMessage TIMEOUT: request_id=%s elapsed=%.2fs (limit=%.0fs)",
+                    request.request_id, elapsed, self._ENGINE_TIMEOUT,
+                )
+                result = {
+                    "reply": (
+                        "Xin lỗi, hệ thống xử lý quá lâu. "
+                        "Bạn vui lòng thử lại với câu hỏi ngắn gọn hơn hoặc "
+                        "sử dụng tính năng tính thuế cơ bản."
+                    ),
+                    "actions": [
+                        {"label": "Tính thuế", "action_type": "quick_reply", "payload": "tính thuế"},
+                        {"label": "Hạn nộp thuế", "action_type": "quick_reply", "payload": "hạn nộp thuế"},
+                    ],
+                    "references": [],
+                    "confidence": 0.0,
+                    "intent": "timeout",
+                }
+
+            # Persist profile update_fields if present (from profile edit)
+            update_fields = result.get("update_fields")
+            if update_fields and customer_profile and customer_profile.get("customer_id"):
+                try:
+                    async with async_session() as session:
+                        repo = CustomerRepository(session)
+                        cid = uuid_mod.UUID(customer_profile["customer_id"])
+                        await repo.update_profile(cid, **update_fields)
+                        await session.commit()
+                    logger.info("Profile updated: customer=%s fields=%s", customer_profile["customer_id"], list(update_fields.keys()))
+                except Exception as db_err:
+                    logger.warning("Failed to persist profile update: %s", db_err)
 
             elapsed = time.monotonic() - start
             logger.info(
@@ -325,6 +474,19 @@ class TaxEngineServicer(pb2_grpc.TaxEngineServicer):
                     list(update_fields.keys()),
                 )
 
+        # If onboarding step 2 just completed, trigger deadline preview
+        if onboarding_result.get("onboarding_complete") and onboarding_result.get("next_step") == "onboarding_done":
+            try:
+                cid = uuid_mod.UUID(customer_profile["customer_id"])
+                from app.services.notification_scheduler import notification_scheduler
+                asyncio.ensure_future(notification_scheduler.send_preview(cid))
+                logger.info(
+                    "Triggered onboarding preview notification for customer %s",
+                    customer_profile.get("customer_id"),
+                )
+            except Exception as e:
+                logger.warning("Failed to trigger onboarding preview: %s", e)
+
         return {
             "reply": onboarding_result["reply"],
             "actions": onboarding_result.get("actions", []),
@@ -334,24 +496,133 @@ class TaxEngineServicer(pb2_grpc.TaxEngineServicer):
         }
 
     async def ProcessMessageStream(self, request, context):
-        """Stream response for long-running operations."""
-        # Process message normally first
-        result = await self.engine.process_message(
-            message=request.message,
-            customer_type=_CUSTOMER_TYPE_MAP.get(request.context.customer_type, "unknown"),
+        """Stream response progressively via server-streaming RPC.
+
+        Uses the same engine.process_message() as the unary RPC to
+        guarantee identical response quality.  The full reply is then
+        streamed back in sentence-level chunks so the client can show
+        progressive updates to the user.
+        """
+        import time
+
+        start = time.monotonic()
+        request_id = request.request_id
+        customer_type = _CUSTOMER_TYPE_MAP.get(request.context.customer_type, "unknown")
+        logger.info("gRPC ProcessMessageStream: request_id=%s msg='%s'", request_id, request.message[:100])
+
+        conversation_history = [
+            {"role": entry.role, "content": entry.content}
+            for entry in request.conversation_history
+        ]
+
+        customer_profile = None
+        if request.HasField("customer_profile") and request.customer_profile.customer_id:
+            customer_profile = {
+                "customer_id": request.customer_profile.customer_id,
+                "customer_type": request.customer_profile.customer_type,
+                "business_name": request.customer_profile.business_name,
+                "tax_code": request.customer_profile.tax_code,
+                "industry": request.customer_profile.industry,
+                "province": request.customer_profile.province,
+                "annual_revenue_range": request.customer_profile.annual_revenue_range,
+                "onboarding_step": request.customer_profile.onboarding_step,
+                "tax_profile": dict(request.customer_profile.tax_profile),
+                "notes": [{"note": n} for n in request.customer_profile.recent_notes],
+                "username": getattr(request.customer_profile, "username", ""),
+                "first_name": getattr(request.customer_profile, "first_name", ""),
+                "display_name": getattr(request.customer_profile, "display_name", ""),
+                "tax_period": request.customer_profile.tax_period,
+                "has_employees": request.customer_profile.has_employees == "true" if request.customer_profile.has_employees else None,
+            }
+            if customer_profile["customer_type"] and customer_profile["customer_type"] != "unknown":
+                customer_type = customer_profile["customer_type"]
+
+        active_cases = [
+            {"case_id": c.case_id, "service_type": c.service_type,
+             "title": c.title, "status": c.status, "current_step": c.current_step}
+            for c in request.active_cases
+        ]
+        summaries = list(request.conversation_summaries)
+
+        memory_context = build_memory_context(
+            customer=customer_profile,
+            active_cases=active_cases,
+            recent_summaries=summaries,
         )
 
+        # Mirror the onboarding check from ProcessMessage so streaming
+        # and unary RPCs behave identically.
+        if customer_profile and customer_profile.get("onboarding_step") in ("new", "collecting_type", "collecting_info", "collecting_tax_period", "collecting_employees"):
+            result = await self._handle_onboarding(
+                request, customer_profile, customer_type,
+            )
+        else:
+            result = await self.engine.process_message(
+                message=request.message,
+                customer_type=customer_type,
+                conversation_history=conversation_history,
+                memory_context=memory_context,
+            )
+
         reply = result.get("reply", "")
-        # Stream in chunks
-        chunk_size = 100
-        for i in range(0, len(reply), chunk_size):
-            chunk = reply[i:i + chunk_size]
-            is_final = (i + chunk_size) >= len(reply)
+        actions = [
+            pb2.SuggestedAction(label=a.get("label", ""), action_type=a.get("action_type", ""), payload=a.get("payload", ""))
+            for a in result.get("actions", [])
+        ]
+        references = [
+            pb2.TaxReference(title=r.get("title", ""), url=r.get("url", ""), snippet=r.get("snippet", ""))
+            for r in result.get("references", [])
+        ]
+
+        # Stream the reply in sentence-level chunks for progressive display.
+        # This gives a "typing" effect on the client while keeping the full
+        # engine logic intact.
+        chunks = self._split_into_stream_chunks(reply)
+
+        for i, chunk in enumerate(chunks):
+            is_final = (i == len(chunks) - 1)
             yield pb2.TaxStreamChunk(
-                request_id=request.request_id,
+                request_id=request_id,
                 chunk=chunk,
                 is_final=is_final,
+                actions=actions if is_final else [],
+                references=references if is_final else [],
             )
+
+        elapsed = time.monotonic() - start
+        logger.info("ProcessMessageStream OK: request_id=%s chunks=%d elapsed=%.2fs", request_id, len(chunks), elapsed)
+
+    @staticmethod
+    def _split_into_stream_chunks(text: str) -> list[str]:
+        """Split reply text into sentence/paragraph-level chunks for streaming.
+
+        Splits at paragraph breaks (\\n\\n), then at line breaks (\\n) for
+        long paragraphs.  Returns at least one chunk even if text is empty.
+        """
+        if not text:
+            return [text]
+
+        chunks: list[str] = []
+        # Split by paragraph first
+        paragraphs = text.split("\n\n")
+
+        for para in paragraphs:
+            if chunks:
+                # Re-add the paragraph separator
+                chunks.append("\n\n")
+
+            # If paragraph is short enough, send as one chunk
+            if len(para) <= 200:
+                chunks.append(para)
+            else:
+                # Split long paragraphs by line
+                lines = para.split("\n")
+                for j, line in enumerate(lines):
+                    if j > 0:
+                        chunks.append("\n")
+                    chunks.append(line)
+
+        return chunks if chunks else [text]
 
     async def LookupRegulation(self, request, context):
         """Lookup tax regulation using RAG vector search."""
@@ -487,6 +758,14 @@ class TaxEngineServicer(pb2_grpc.TaxEngineServicer):
         tax_profile = customer.tax_profile or {}
         tax_profile_str = {k: str(v) for k, v in tax_profile.items()}
 
+        profile_data = customer.profile_data or {}
+        profile_data_str = {k: str(v) for k, v in profile_data.items()}
+
+        # Convert has_employees bool to string for proto compatibility
+        has_employees_str = ""
+        if customer.has_employees is not None:
+            has_employees_str = "true" if customer.has_employees else "false"
+
         return pb2.CustomerProfileMsg(
             customer_id=str(customer.id),
             channel=customer.channel or "",
@@ -501,6 +780,12 @@ class TaxEngineServicer(pb2_grpc.TaxEngineServicer):
             onboarding_step=customer.onboarding_step or "new",
             tax_profile=tax_profile_str,
             recent_notes=recent_notes,
+            email=customer.email or "",
+            phone=customer.phone or "",
+            address=customer.address or "",
+            profile_data=profile_data_str,
+            tax_period=customer.tax_period or "",
+            has_employees=has_employees_str,
         )
 
     def _case_to_proto(self, case):
@@ -521,9 +806,21 @@ class TaxEngineServicer(pb2_grpc.TaxEngineServicer):
 
 
 async def serve_grpc() -> grpc.aio.Server:
-    """Start the gRPC server."""
-    # Ensure database tables exist
-    await _ensure_tables()
+    """Start the gRPC server.
+
+    Handles database initialization failures gracefully — if the database
+    is unreachable the server still starts (DB-dependent RPCs will fail
+    individually rather than preventing all message processing).
+    """
+    # Ensure database tables exist (retry with backoff)
+    try:
+        await _ensure_tables()
+    except Exception:
+        logger.error(
+            "Could not connect to database — starting gRPC server WITHOUT "
+            "database support. Customer profiles and support cases will be "
+            "unavailable until the database is reachable."
+        )
 
     server = grpc.aio.server(futures.ThreadPoolExecutor(max_workers=10))
     pb2_grpc.add_TaxEngineServicer_to_server(TaxEngineServicer(), server)

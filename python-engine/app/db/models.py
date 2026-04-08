@@ -5,7 +5,7 @@ SQLAlchemy models for Tax Assistant persistent data.
 import uuid
 from datetime import date, datetime
 
-from sqlalchemy import Date, DateTime, Float, ForeignKey, Index, String, Text, UniqueConstraint, func, text
+from sqlalchemy import BigInteger, Boolean, Date, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, func, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -95,6 +95,17 @@ class Customer(Base):
     channel: Mapped[str] = mapped_column(String(20), nullable=False)
     channel_user_id: Mapped[str] = mapped_column(String(100), nullable=False)
 
+    # Telegram/platform identity fields (populated from first message)
+    username: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    first_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    last_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    display_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+
+    # Contact info (user-provided via profile editing)
+    email: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    phone: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    address: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
     # Business info (collected during onboarding)
     customer_type: Mapped[str] = mapped_column(String(20), default="unknown")
     business_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
@@ -104,13 +115,21 @@ class Customer(Base):
     annual_revenue_range: Mapped[str | None] = mapped_column(String(20), nullable=True)
     employee_count_range: Mapped[str | None] = mapped_column(String(20), nullable=True)
 
+    # Tax period & employee info (collected during onboarding step 2)
+    tax_period: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    has_employees: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+
     # Onboarding state
     onboarding_step: Mapped[str] = mapped_column(String(30), default="new")
+
+    # Notification preferences
+    notification_enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("true"))
 
     # Flexible JSONB fields for extensibility
     preferences: Mapped[dict | None] = mapped_column(JSONB, nullable=True, default=dict)
     tax_profile: Mapped[dict | None] = mapped_column(JSONB, nullable=True, default=dict)
     notes: Mapped[list | None] = mapped_column(JSONB, nullable=True, default=list)
+    profile_data: Mapped[dict | None] = mapped_column(JSONB, nullable=True, default=dict)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
@@ -191,3 +210,58 @@ class ConversationSummary(Base):
 
     # Relationships
     customer: Mapped["Customer"] = relationship(back_populates="conversation_summaries")
+
+
+class MetricsSnapshot(Base):
+    """Hourly aggregated metrics snapshots for the portal dashboard."""
+
+    __tablename__ = "metrics_snapshots"
+    __table_args__ = (
+        Index("idx_snapshots_at", "snapshot_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    snapshot_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    total_users: Mapped[int] = mapped_column(Integer, default=0)
+    active_users_day: Mapped[int] = mapped_column(Integer, default=0)
+    active_users_month: Mapped[int] = mapped_column(Integer, default=0)
+    new_users_day: Mapped[int] = mapped_column(Integer, default=0)
+    new_users_month: Mapped[int] = mapped_column(Integer, default=0)
+    new_users_year: Mapped[int] = mapped_column(Integer, default=0)
+
+    segmentation_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True, default=dict)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class NotificationLog(Base):
+    """Log of notifications sent (or attempted) to users.
+
+    Used for anti-spam checks and delivery tracking.
+    """
+
+    __tablename__ = "notification_logs"
+    __table_args__ = (
+        Index("idx_notif_customer_sent", "customer_id", "sent_at"),
+        Index("idx_notif_job_id", "job_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    customer_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("customers.id", ondelete="CASCADE"), nullable=False,
+    )
+    job_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    notification_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    message_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    was_delivered: Mapped[bool] = mapped_column(Boolean, default=False)
+    retry_count: Mapped[int] = mapped_column(Integer, default=0)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    sent_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(),
+    )
+
+    customer: Mapped["Customer"] = relationship()

@@ -7,9 +7,15 @@ import { ZaloAdapter } from './channels/zalo/oa';
 import { TaxEngineClient } from './grpc/client';
 import { MessageRouter } from './router/messageRouter';
 import { createServer } from './api/server';
+import { setTelegramAdapter } from './api/routes/health';
+import { memoryMonitor } from './utils/memoryMonitor';
 
 async function bootstrap(): Promise<void> {
   logger.info('Starting Tax Assistant Gateway...', { env: config.app.env });
+
+  // === Start memory monitoring ===
+  memoryMonitor.start();
+  logger.info('Memory monitor started');
 
   // === Initialize core services ===
   const sessionStore = new SessionStore();
@@ -17,10 +23,19 @@ async function bootstrap(): Promise<void> {
 
   // === Initialize Tax Engine gRPC client ===
   const taxEngine = new TaxEngineClient();
-  try {
-    await taxEngine.connect();
-  } catch (error) {
-    logger.warn('Tax Engine not available at startup, will retry on first request', { error });
+  let connected = false;
+  for (let i = 0; i < 6; i++) {
+    try {
+      await taxEngine.connect(10000); // 10s per attempt
+      connected = true;
+      break;
+    } catch {
+      logger.warn(`gRPC connect attempt ${i + 1}/6 failed, retrying...`);
+      await new Promise(r => setTimeout(r, 5000));
+    }
+  }
+  if (!connected) {
+    logger.error('Tax Engine not reachable after 6 attempts - continuing anyway');
   }
 
   // === Initialize channel adapters ===
@@ -36,6 +51,9 @@ async function bootstrap(): Promise<void> {
   await telegramAdapter.initialize();
   await zaloAdapter.initialize();
 
+  // Expose adapter to health check so it can report polling status
+  setTelegramAdapter(telegramAdapter);
+
   // === Start HTTP server ===
   const app = createServer({ sessionStore, zaloAdapter, telegramAdapter });
 
@@ -46,6 +64,9 @@ async function bootstrap(): Promise<void> {
   // === Graceful shutdown ===
   const shutdown = async (signal: string) => {
     logger.info(`Received ${signal}, shutting down gracefully...`);
+
+    // Stop memory monitor first
+    memoryMonitor.stop();
 
     server.close(() => {
       logger.info('HTTP server closed');

@@ -1,12 +1,16 @@
+// Node 20+ provides native fetch & Headers — no polyfill needed.
 import { Telegraf, Context } from 'telegraf';
 import { Update } from 'telegraf/types';
 import { config } from '../../config';
 import { logger } from '../../utils/logger';
+import { markdownToHtml, stripMarkdown } from '../../utils/formatter';
+import { getHomepageTemplate } from '../../services/templateService';
 import {
   ChannelAdapter,
   IncomingMessage,
   MessageHandler,
   OutgoingMessage,
+  StreamHandle,
 } from '../types';
 import { mapTelegramMessage } from './mapper';
 
@@ -46,69 +50,63 @@ export class TelegramAdapter implements ChannelAdapter {
   readonly channel = 'telegram' as const;
   private bot: Telegraf;
   private messageHandler: MessageHandler | null = null;
+  private lastUpdateTime = Date.now();
+  private watchdogTimer: ReturnType<typeof setInterval> | null = null;
+
+  /** Check if bot polling is considered alive (received update within threshold) */
+  isPollingHealthy(thresholdMs = 120_000): boolean {
+    return Date.now() - this.lastUpdateTime < thresholdMs;
+  }
 
   constructor() {
     this.bot = new Telegraf(config.telegram.botToken);
   }
 
   async initialize(): Promise<void> {
-    // Register message handler
-    this.bot.on('message', async (ctx: Context<Update.MessageUpdate>) => {
-      try {
-        const message = mapTelegramMessage(ctx);
-        if (message && this.messageHandler) {
-          await this.messageHandler(message);
-        }
-      } catch (error) {
-        logger.error('Error processing Telegram message', { error });
-      }
+    // === Global error handler — catches middleware & handler errors ===
+    this.bot.catch((err: unknown) => {
+      logger.error('Telegraf caught error', { error: err });
     });
 
-    // Handle inline keyboard button clicks (callback_query)
-    this.bot.on('callback_query', async (ctx) => {
-      try {
-        // Acknowledge the callback to remove loading state on the button
-        await ctx.answerCbQuery();
+    // ── Bot commands ──────────────────────────────────────────────────────
+    // MUST be registered BEFORE on('message'). Telegraf processes middleware
+    // in registration order: the command filter matches and consumes the
+    // update, so on('message') never fires for these commands.
 
-        const cbQuery = ctx.callbackQuery;
-        if (!('data' in cbQuery) || !cbQuery.data) return;
-
-        const from = cbQuery.from;
-        const chatId = cbQuery.message?.chat?.id;
-        if (!chatId) return;
-
-        const message: IncomingMessage = {
-          channel: 'telegram',
-          userId: String(from.id),
-          chatId: String(chatId),
-          userName: [from.first_name, from.last_name].filter(Boolean).join(' '),
-          messageId: String(cbQuery.message?.message_id ?? Date.now()),
-          timestamp: new Date(),
-          type: 'text',
-          text: cbQuery.data,
-          raw: cbQuery,
-        };
-
-        if (this.messageHandler) {
-          await this.messageHandler(message);
-        }
-      } catch (error) {
-        logger.error('Error processing Telegram callback query', { error });
-      }
-    });
-
-    // Bot commands
     this.bot.command('start', async (ctx) => {
-      await ctx.reply(
-        'Xin chào! Tôi là Trợ lý Thuế ảo. 🇻🇳\n\n' +
-        'Tôi có thể hỗ trợ bạn các vấn đề về:\n' +
-        '• Thuế GTGT (VAT)\n' +
-        '• Thuế thu nhập doanh nghiệp (CIT)\n' +
-        '• Thuế thu nhập cá nhân (PIT)\n' +
-        '• Thuế môn bài\n' +
-        '• Kê khai và nộp thuế\n\n' +
-        'Hãy gửi câu hỏi của bạn để tôi hỗ trợ!',
-      );
+      try {
+        const firstName = ctx.from?.first_name;
+        const lastName = ctx.from?.last_name;
+        const userName =
+          [firstName, lastName].filter(Boolean).join(' ') ||
+          ctx.from?.username ||
+          'bạn';
+
+        const homepage = getHomepageTemplate(userName);
+
+        await ctx.reply(homepage, {
+          parse_mode: 'HTML',
+          reply_markup: {
+            inline_keyboard: [
+              [
+                { text: 'Tính thuế', callback_data: 'Tính thuế' },
+                { text: 'Tra cứu quy định', callback_data: 'Tra cứu quy định' },
+                { text: 'Hướng dẫn kê khai', callback_data: 'Hướng dẫn kê khai' },
+              ],
+              [
+                { text: 'Hỗ trợ SME', callback_data: 'Hỗ trợ SME' },
+                { text: 'Câu hỏi mẫu', callback_data: 'Câu hỏi mẫu' },
+              ],
+            ],
+          },
+        });
+        logger.info('/start command processed', { userId: ctx.from?.id, chatId: ctx.chat?.id });
+      } catch (error) {
+        logger.error('Failed to process /start command', { error, userId: ctx.from?.id });
+        try {
+          await ctx.reply('Xin lỗi, có lỗi xảy ra khi xử lý lệnh /start. Vui lòng thử lại sau.');
+        } catch { /* ignore */ }
+      }
     });
 
     this.bot.command('help', async (ctx) => {
@@ -122,16 +120,200 @@ export class TelegramAdapter implements ChannelAdapter {
       );
     });
 
-    // Setup webhook or polling based on environment
-    if (config.app.isProduction && config.telegram.webhookUrl) {
+    // ── Generic message handler ────────────────────────────────────────────
+    // Catch-all for all non-command messages. Registered AFTER command
+    // handlers so commands are consumed first and never reach here.
+    this.bot.on('message', async (ctx: Context<Update.MessageUpdate>) => {
+      this.lastUpdateTime = Date.now();
+      const messageId = ctx.message?.message_id;
+      const userId = ctx.from?.id;
+      const chatId = ctx.chat?.id;
+      const text = 'text' in ctx.message ? ctx.message.text : '[non-text message]';
+
+      // Send "typing..." immediately so the user sees feedback right away.
+      // Telegram's typing indicator auto-expires after ~5 s, so we refresh
+      // it every 4 s while the message is being processed.
+      let typingInterval: ReturnType<typeof setInterval> | null = null;
+      if (chatId) {
+        ctx.telegram.sendChatAction(chatId, 'typing').catch(() => {});
+        typingInterval = setInterval(() => {
+          ctx.telegram.sendChatAction(chatId, 'typing').catch(() => {});
+        }, 4000);
+      }
+
+      try {
+        logger.debug('Received Telegram message', {
+          messageId,
+          userId,
+          chatId,
+          textPreview: typeof text === 'string' ? text.slice(0, 100) : text,
+        });
+
+        const message = mapTelegramMessage(ctx);
+        if (message && this.messageHandler) {
+          await this.messageHandler(message);
+          logger.debug('Telegram message processed successfully', { messageId, userId, chatId });
+        } else {
+          logger.warn('No message handler or mapped message', { messageId, userId, chatId });
+        }
+      } catch (error) {
+        logger.error('Error processing Telegram message', {
+          error: error instanceof Error ? error.message : String(error),
+          stack: error instanceof Error ? error.stack : undefined,
+          messageId,
+          userId,
+          chatId,
+        });
+        
+        // Try to send error message to user
+        try {
+          if (chatId && typeof text === 'string') {
+            await ctx.reply('Xin lỗi, tôi gặp sự cố khi xử lý tin nhắn của bạn. Vui lòng thử lại sau.');
+          }
+        } catch (sendError) {
+          logger.error('Failed to send error message for Telegram message', {
+            sendError: sendError instanceof Error ? sendError.message : String(sendError),
+            messageId,
+            userId,
+            chatId,
+          });
+        }
+      } finally {
+        if (typingInterval) clearInterval(typingInterval);
+      }
+    });
+
+    // ── Inline keyboard button clicks ─────────────────────────────────────
+    this.bot.on('callback_query', async (ctx) => {
+      this.lastUpdateTime = Date.now();
+      // Answer the callback query immediately to remove the loading spinner
+      // on the button, then send a typing indicator while we process.
+      await ctx.answerCbQuery().catch(() => {});
+
+      const cbQuery = ctx.callbackQuery;
+      if (!('data' in cbQuery) || !cbQuery.data) return;
+
+      const from = cbQuery.from;
+      const chatId = cbQuery.message?.chat?.id;
+      if (!chatId) return;
+
+      // Typing indicator — start immediately and refresh every 4 s.
+      ctx.telegram.sendChatAction(chatId, 'typing').catch(() => {});
+      const typingInterval = setInterval(() => {
+        ctx.telegram.sendChatAction(chatId, 'typing').catch(() => {});
+      }, 4000);
+
+      try {
+        const firstName = from.first_name || undefined;
+        const lastName = from.last_name || undefined;
+        const telegramUsername = from.username || undefined;
+        const message: IncomingMessage = {
+          channel: 'telegram',
+          userId: String(from.id),
+          chatId: String(chatId),
+          userName: [firstName, lastName].filter(Boolean).join(' ') || telegramUsername || String(from.id),
+          telegramUsername,
+          firstName,
+          lastName,
+          messageId: String(cbQuery.message?.message_id ?? Date.now()),
+          timestamp: new Date(),
+          type: 'text',
+          text: cbQuery.data,
+          raw: cbQuery,
+        };
+
+        if (this.messageHandler) {
+          await this.messageHandler(message);
+        }
+      } catch (error) {
+        logger.error('Error processing Telegram callback query', { error });
+      } finally {
+        clearInterval(typingInterval);
+      }
+    });
+
+    // Setup webhook or polling.
+    // Prefer webhook when TELEGRAM_WEBHOOK_URL is set (any environment).
+    // Webhook is push-based → no long-polling, no watchdog, no burst API
+    // calls that can interfere with other Telegram bots on the same host.
+    if (config.telegram.webhookUrl) {
       await this.bot.telegram.setWebhook(config.telegram.webhookUrl, {
         secret_token: config.telegram.webhookSecret,
       });
       logger.info('Telegram webhook set', { url: config.telegram.webhookUrl });
     } else {
-      await this.bot.launch();
-      logger.info('Telegram bot started in polling mode');
+      // Fallback: polling mode (local dev without tunnel).
+      await this.startPollingWithRetry();
     }
+  }
+
+  /**
+   * Start polling with retry + exponential backoff.
+   * If all retries fail, log a warning but do NOT throw — the gateway
+   * can still serve HTTP and the watchdog will attempt reconnection.
+   */
+  private async startPollingWithRetry(maxRetries = 4): Promise<void> {
+    const delays = [2000, 4000, 8000, 16000]; // exponential backoff
+
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        await this.bot.telegram.deleteWebhook({ drop_pending_updates: false });
+        this.bot.launch({ dropPendingUpdates: false });
+        logger.info('Telegram bot started in polling mode');
+        this.setupPollingWatchdog();
+        return;
+      } catch (err) {
+        if (attempt < maxRetries) {
+          const delay = delays[attempt] ?? 16000;
+          logger.warn(
+            `Telegram polling start failed (attempt ${attempt + 1}/${maxRetries + 1}), retrying in ${delay / 1000}s`,
+            { error: err },
+          );
+          await new Promise((r) => setTimeout(r, delay));
+        } else {
+          logger.error(
+            `Telegram polling failed after ${maxRetries + 1} attempts — gateway will start without Telegram. ` +
+            'Watchdog will retry later.',
+            { error: err },
+          );
+        }
+      }
+    }
+  }
+
+  private setupPollingWatchdog(): void {
+    // Watchdog: only restart polling if Telegram API itself is unreachable,
+    // NOT just because there are no incoming messages (idle bot is healthy bot).
+    // Using getMe() as a real connectivity probe avoids spurious 409 Conflicts
+    // that occur when stop()+launch() race with Telegram's open long-poll connection.
+    this.watchdogTimer = setInterval(async () => {
+      if (!this.isPollingHealthy(600_000)) {
+        // Probe Telegram API to confirm connectivity before restarting.
+        try {
+          await this.bot.telegram.getMe();
+          // API reachable — bot is idle but polling is fine, reset the timer.
+          this.lastUpdateTime = Date.now();
+          return;
+        } catch {
+          // Cannot reach Telegram — polling is genuinely broken, restart needed.
+        }
+
+        logger.warn('Telegram polling watchdog: no updates for 10 min, restarting polling');
+        try {
+          this.bot.stop('SIGTERM');
+          // Wait for Telegram to close the existing long-poll connection before
+          // opening a new one. Without this delay the new getUpdates call races
+          // with the old one and Telegram returns a 409 Conflict, killing polling.
+          await new Promise((r) => setTimeout(r, 5000));
+          await this.bot.telegram.deleteWebhook({ drop_pending_updates: false });
+          this.bot.launch({ dropPendingUpdates: false });
+          this.lastUpdateTime = Date.now();
+          logger.info('Telegram polling restarted by watchdog');
+        } catch (err) {
+          logger.error('Watchdog failed to restart polling', { error: err });
+        }
+      }
+    }, 300_000); // Check every 5 minutes
   }
 
   onMessage(handler: MessageHandler): void {
@@ -155,22 +337,23 @@ export class TelegramAdapter implements ChannelAdapter {
           ? { reply_markup: { inline_keyboard: keyboard } }
           : {};
 
+        const htmlChunk = markdownToHtml(chunks[i]);
+
         try {
-          // Try HTML parse mode first for nice formatting
-          await this.bot.telegram.sendMessage(telegramChatId, chunks[i], {
+          // Send with HTML parse mode after markdown→HTML conversion
+          await this.bot.telegram.sendMessage(telegramChatId, htmlChunk, {
             parse_mode: 'HTML',
             ...replyMarkup,
           });
         } catch (htmlError: any) {
-          // If HTML parsing fails (LLM response contains <, >, & etc.),
-          // fall back to plain text
+          // If HTML parsing still fails, fall back to plain text
           if (htmlError?.message?.includes("can't parse entities")) {
             logger.warn('Telegram HTML parse failed, falling back to plain text', {
               chatId,
               chunkIndex: i,
               error: htmlError.message,
             });
-            await this.bot.telegram.sendMessage(telegramChatId, chunks[i], {
+            await this.bot.telegram.sendMessage(telegramChatId, stripMarkdown(chunks[i]), {
               ...replyMarkup,
             });
           } else {
@@ -196,6 +379,107 @@ export class TelegramAdapter implements ChannelAdapter {
     }
   }
 
+  /**
+   * Send an initial placeholder message and return a handle for progressive
+   * updates via Telegram's editMessageText API.
+   *
+   * The handle batches rapid token updates to avoid hitting Telegram's rate
+   * limit (~30 edits/second per chat).
+   */
+  async sendStreamStart(chatId: string): Promise<StreamHandle | undefined> {
+    const telegramChatId = Number(chatId);
+
+    try {
+      // Send a typing indicator placeholder
+      const sent = await this.bot.telegram.sendMessage(telegramChatId, '💭 Đang xử lý...');
+      const messageId = sent.message_id;
+
+      let accumulated = '';
+      let pendingUpdate: ReturnType<typeof setTimeout> | null = null;
+      // Throttle edits: at most once every 800ms to stay well within
+      // Telegram rate limits and avoid visual flickering.
+      const THROTTLE_MS = 800;
+
+      const flushUpdate = async () => {
+        pendingUpdate = null;
+        if (!accumulated) return;
+        try {
+          const progressHtml = markdownToHtml(accumulated + ' ▍');
+          await this.bot.telegram.editMessageText(
+            telegramChatId,
+            messageId,
+            undefined,
+            progressHtml,
+            { parse_mode: 'HTML' },
+          );
+        } catch (editErr: any) {
+          // "message is not modified" is harmless (same content)
+          if (!editErr?.message?.includes('message is not modified')) {
+            logger.warn('Stream edit failed', { chatId, error: editErr?.message });
+          }
+        }
+      };
+
+      const bot = this.bot;
+      const adapter = this;
+
+      return {
+        update: async (text: string) => {
+          accumulated += text;
+          // Schedule a throttled edit
+          if (!pendingUpdate) {
+            pendingUpdate = setTimeout(flushUpdate, THROTTLE_MS);
+          }
+        },
+
+        finalize: async (message: OutgoingMessage) => {
+          // Cancel any pending throttled update
+          if (pendingUpdate) {
+            clearTimeout(pendingUpdate);
+            pendingUpdate = null;
+          }
+
+          // Build final text with references
+          const finalText = message.text || accumulated;
+
+          // Build inline keyboard
+          const keyboard = message.quickReplies?.map((qr) => [{
+            text: qr.label,
+            callback_data: qr.payload,
+          }]);
+
+          const replyMarkup = keyboard
+            ? { reply_markup: { inline_keyboard: keyboard } }
+            : {};
+
+          const finalHtml = markdownToHtml(finalText);
+
+          try {
+            await bot.telegram.editMessageText(
+              telegramChatId,
+              messageId,
+              undefined,
+              finalHtml,
+              { parse_mode: 'HTML', ...replyMarkup },
+            );
+          } catch (editErr: any) {
+            if (!editErr?.message?.includes('message is not modified')) {
+              // Fallback: send as a new message if edit fails
+              logger.warn('Stream finalize edit failed, sending new message', {
+                chatId,
+                error: editErr?.message,
+              });
+              await adapter.sendMessage(chatId, message);
+            }
+          }
+        },
+      };
+    } catch (err) {
+      logger.warn('sendStreamStart failed, streaming unavailable', { chatId, error: err });
+      return undefined;
+    }
+  }
+
   /** Returns the Express webhook callback for production use */
   getWebhookCallback() {
     return this.bot.webhookCallback('/webhook/telegram', {
@@ -204,7 +488,35 @@ export class TelegramAdapter implements ChannelAdapter {
   }
 
   async shutdown(): Promise<void> {
-    this.bot.stop('SIGTERM');
-    logger.info('Telegram bot stopped');
+    if (this.watchdogTimer) {
+      clearInterval(this.watchdogTimer);
+      this.watchdogTimer = null;
+    }
+    try {
+      logger.info('Shutting down Telegram bot gracefully...');
+
+      // Stop receiving new updates first
+      this.bot.stop('SIGTERM');
+
+      // Delete webhook to clean up Telegram state (prevents conflict on restart)
+      try {
+        await this.bot.telegram.deleteWebhook({ drop_pending_updates: true });
+      } catch (webhookError) {
+        logger.warn('Could not delete webhook during shutdown', { error: webhookError });
+      }
+
+      // Wait a moment for cleanup
+      await new Promise(resolve => setTimeout(resolve, 1000));
+
+      logger.info('Telegram bot stopped gracefully');
+    } catch (error) {
+      logger.error('Error during Telegram bot shutdown', { error });
+      // Force stop if graceful shutdown fails
+      try {
+        this.bot.stop();
+      } catch {
+        // Ignore any further errors
+      }
+    }
   }
 }
