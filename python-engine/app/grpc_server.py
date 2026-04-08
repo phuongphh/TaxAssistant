@@ -282,8 +282,12 @@ class TaxEngineServicer(pb2_grpc.TaxEngineServicer):
                 request.context.session_id,
             )
 
-            # Check if customer is in onboarding flow (step 1 or step 2)
-            if customer_profile and customer_profile.get("onboarding_step") in ("new", "collecting_type", "collecting_info", "completed", "collecting_tax_period", "collecting_employees"):
+            # Check if customer is in onboarding flow (step 1 or step 2).
+            # NOTE: "completed" is a legacy state meaning step 1 is done but step 2 hasn't
+            # started yet. We intentionally exclude it here so users at that state can
+            # freely use the service without being re-routed into step 2 onboarding on
+            # every message. Step 2 is triggered separately (e.g., via notifications).
+            if customer_profile and customer_profile.get("onboarding_step") in ("new", "collecting_type", "collecting_info", "collecting_tax_period", "collecting_employees"):
                 coro = self._handle_onboarding(
                     request, customer_profile, customer_type
                 )
@@ -548,7 +552,7 @@ class TaxEngineServicer(pb2_grpc.TaxEngineServicer):
 
         # Mirror the onboarding check from ProcessMessage so streaming
         # and unary RPCs behave identically.
-        if customer_profile and customer_profile.get("onboarding_step") in ("new", "collecting_type", "collecting_info", "completed", "collecting_tax_period", "collecting_employees"):
+        if customer_profile and customer_profile.get("onboarding_step") in ("new", "collecting_type", "collecting_info", "collecting_tax_period", "collecting_employees"):
             result = await self._handle_onboarding(
                 request, customer_profile, customer_type,
             )
