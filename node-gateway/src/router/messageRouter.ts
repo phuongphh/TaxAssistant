@@ -115,7 +115,13 @@ export class MessageRouter {
       }
 
       // 3. Check if user input is a suggestion choice
-      if (message.text && session.pendingSuggestions && isSuggestionChoice(message.text)) {
+      const ONBOARDING_ACTIVE_STEPS = new Set([
+        'new', 'collecting_type', 'collecting_info',
+        'completed', 'collecting_tax_period', 'collecting_employees'
+      ]);
+      const isInOnboarding = ONBOARDING_ACTIVE_STEPS.has(customerProfile?.onboardingStep ?? '');
+
+      if (!isInOnboarding && message.text && session.pendingSuggestions && isSuggestionChoice(message.text)) {
         const action = getSuggestionAction(message.text.trim(), session.pendingSuggestions);
         if (action) {
           // Update context based on chosen suggestion
@@ -188,14 +194,20 @@ export class MessageRouter {
       logger.info('Reply built', { requestId, elapsedMs: Date.now() - startMs });
 
       // 7.5 Generate and add context-aware suggestions
-      const context = detectContext(engineResponse.reply);
-      session.currentContext = context;
-      const suggestions = generateSuggestions(context);
-      session.pendingSuggestions = suggestions;
-
-      // Add suggestions to reply text
-      if (suggestions.length > 0) {
-        reply.text += formatSuggestions(suggestions);
+      // Only generate suggestions when engine didn't provide its own navigation buttons
+      const hasEngineActions = (reply.quickReplies?.length ?? 0) > 0;
+      if (!hasEngineActions) {
+        const context = detectContext(engineResponse.reply);
+        session.currentContext = context;
+        const suggestions = generateSuggestions(context);
+        session.pendingSuggestions = suggestions;
+        if (suggestions.length > 0) {
+          reply.text += formatSuggestions(suggestions);
+        }
+      } else {
+        // Clear stale suggestions so the NEXT button click isn't misrouted
+        session.pendingSuggestions = [];
+        session.currentContext = undefined;
       }
 
       await this.sessionManager.saveSession(session);
