@@ -197,8 +197,8 @@ export class MessageRouter {
 
       // 7. Build reply
       const reply: OutgoingMessage = {
-        text: engineResponse.reply,
-        quickReplies: engineResponse.actions
+        text: engineResponse?.reply ?? '',
+        quickReplies: engineResponse?.actions
           ?.filter((a) => a.actionType === 'quick_reply')
           .map((a) => ({ label: a.label, payload: a.payload })),
       };

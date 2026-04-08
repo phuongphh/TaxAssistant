@@ -322,6 +322,11 @@ export class TaxEngineClient {
           });
           reject(new TaxEngineError(`Tax Engine error: ${err.message}`));
         } else {
+          if (!response) {
+            this.circuitBreaker.recordFailure();
+            reject(new TaxEngineError('Tax Engine returned empty response'));
+            return;
+          }
           this.circuitBreaker.recordSuccess();
           logger.debug('gRPC ProcessMessage OK', {
             requestId,
@@ -484,6 +489,10 @@ export class TaxEngineClient {
           logger.error('gRPC GetOrCreateCustomer error', { code: err.code, message: err.message });
           reject(new TaxEngineError(`Customer lookup error: ${err.message}`));
         } else {
+          if (!response) {
+            reject(new TaxEngineError('Tax Engine returned empty customer response'));
+            return;
+          }
           resolve({
             customerId: response.customerId || '',
             channel: response.channel || '',
