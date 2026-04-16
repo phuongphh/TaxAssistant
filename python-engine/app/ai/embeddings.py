@@ -1,11 +1,13 @@
 """
 Embedding service for vector search over tax regulation documents.
-Uses sentence-transformers with multilingual support (Vietnamese).
+Uses Voyage AI API (voyage-multilingual-2) for multilingual embeddings.
 """
 
+import asyncio
 import logging
 
 import chromadb
+import voyageai
 
 from app.config import settings
 
@@ -14,11 +16,14 @@ logger = logging.getLogger(__name__)
 
 class EmbeddingService:
     """
-    Manages vector embeddings using ChromaDB.
+    Manages vector embeddings using ChromaDB + Voyage AI API.
     Used for RAG - retrieving relevant tax regulations for user queries.
+
+    voyage-multilingual-2 produces 1024-dimensional vectors.
     """
 
     def __init__(self) -> None:
+        self._voyage = voyageai.AsyncClient(api_key=settings.voyage_api_key)
         self.client = chromadb.PersistentClient(
             path=settings.chroma_persist_dir,
         )
@@ -27,35 +32,68 @@ class EmbeddingService:
             metadata={"hnsw:space": "cosine"},
         )
 
-    def add_document(
+    async def _call_voyage(self, texts: list[str], input_type: str) -> list[list[float]]:
+        """Call Voyage AI API with retry on RateLimitError (handles free-tier 3 RPM limit)."""
+        wait = 20
+        for attempt in range(6):
+            try:
+                result = await self._voyage.embed(
+                    texts,
+                    model=settings.embedding_model,
+                    input_type=input_type,
+                )
+                return result.embeddings
+            except voyageai.error.RateLimitError:
+                if attempt == 5:
+                    raise
+                logger.warning(
+                    "Voyage AI rate limit hit (attempt %d/6), waiting %ds...",
+                    attempt + 1, wait,
+                )
+                await asyncio.sleep(wait)
+                wait = min(wait * 2, 60)
+
+    async def _embed(self, texts: list[str]) -> list[list[float]]:
+        """Call Voyage AI API to get embeddings for a list of texts."""
+        return await self._call_voyage(texts, input_type="document")
+
+    async def _embed_query(self, query: str) -> list[list[float]]:
+        """Call Voyage AI API with query input_type for better retrieval."""
+        return await self._call_voyage([query], input_type="query")
+
+    async def add_document(
         self,
         doc_id: str,
         content: str,
         metadata: dict | None = None,
     ) -> None:
         """Add a document to the vector store."""
+        embeddings = await self._embed([content])
         self.collection.add(
             ids=[doc_id],
+            embeddings=embeddings,
             documents=[content],
             metadatas=[metadata or {}],
         )
         logger.debug("Added document to vector store: %s", doc_id)
 
-    def add_documents_batch(
+    async def add_documents_batch(
         self,
         doc_ids: list[str],
         contents: list[str],
         metadatas: list[dict] | None = None,
     ) -> None:
         """Add multiple documents at once."""
+        embeddings = await self._embed(contents)
         self.collection.add(
             ids=doc_ids,
+            embeddings=embeddings,
             documents=contents,
             metadatas=metadatas or [{}] * len(doc_ids),
         )
         logger.info("Added %d documents to vector store", len(doc_ids))
 
-    def search(
+    async def search(
         self,
         query: str,
         n_results: int = 5,
@@ -75,11 +113,12 @@ class EmbeddingService:
         doc_count = self.collection.count()
         n_results = min(n_results, doc_count)
 
+        query_embedding = await self._embed_query(query)
         where_filter = {"category": category_filter} if category_filter else None
 
         try:
             results = self.collection.query(
-                query_texts=[query],
+                query_embeddings=query_embedding,
                 n_results=n_results,
                 where=where_filter,
             )
@@ -88,7 +127,7 @@ class EmbeddingService:
             logger.warning("ChromaDB query with filter failed (%s), retrying without filter", e)
             try:
                 results = self.collection.query(
-                    query_texts=[query],
+                    query_embeddings=query_embedding,
                     n_results=n_results,
                 )
             except Exception as e2:
@@ -110,3 +149,13 @@ class EmbeddingService:
     def get_document_count(self) -> int:
         """Get total number of documents in the vector store."""
         return self.collection.count()
+
+    def reset_collection(self) -> None:
+        """Delete and recreate the ChromaDB collection. Used when switching embedding models."""
+        logger.warning("Resetting ChromaDB collection 'tax_regulations'...")
+        self.client.delete_collection("tax_regulations")
+        self.collection = self.client.get_or_create_collection(
+            name="tax_regulations",
+            metadata={"hnsw:space": "cosine"},
+        )
+        logger.info("ChromaDB collection reset complete.")

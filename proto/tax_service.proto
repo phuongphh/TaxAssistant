@@ -177,14 +177,21 @@ message CustomerProfileMsg {
   string province = 8;
   string annual_revenue_range = 9;
   string employee_count_range = 10;
-  string onboarding_step = 11;     // "new" | "collecting_type" | "collecting_info" | "completed"
+  string onboarding_step = 11;     // "new" | "collecting_type" | "collecting_info" | "completed" | "collecting_tax_period" | "collecting_employees" | "onboarding_done"
   map<string, string> tax_profile = 12;
+  string tax_period = 22;          // "monthly" | "quarterly" | "flat_tax" | ""
+  string has_employees = 23;       // "true" | "false" | "" (string for proto compat)
   repeated string recent_notes = 13;
   // Telegram/platform identity fields
   string username = 14;            // @username (may be empty)
   string first_name = 15;
   string last_name = 16;
   string display_name = 17;        // Computed: first_name + last_name or @username
+  // Contact and extended profile fields
+  string email = 18;
+  string phone = 19;
+  string address = 20;
+  map<string, string> profile_data = 21;  // Dynamic fields per business type
 }
 
 message CustomerLookup {

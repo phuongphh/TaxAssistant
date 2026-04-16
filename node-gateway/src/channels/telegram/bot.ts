@@ -3,6 +3,8 @@ import { Telegraf, Context } from 'telegraf';
 import { Update } from 'telegraf/types';
 import { config } from '../../config';
 import { logger } from '../../utils/logger';
+import { markdownToHtml, stripMarkdown } from '../../utils/formatter';
+import { getHomepageTemplate } from '../../services/templateService';
 import {
   ChannelAdapter,
   IncomingMessage,
@@ -66,33 +68,142 @@ export class TelegramAdapter implements ChannelAdapter {
       logger.error('Telegraf caught error', { error: err });
     });
 
-    // Register message handler
-    this.bot.on('message', async (ctx: Context<Update.MessageUpdate>) => {
-      this.lastUpdateTime = Date.now();
+    // ── Bot commands ──────────────────────────────────────────────────────
+    // MUST be registered BEFORE on('message'). Telegraf processes middleware
+    // in registration order: the command filter matches and consumes the
+    // update, so on('message') never fires for these commands.
+
+    this.bot.command('start', async (ctx) => {
       try {
-        const message = mapTelegramMessage(ctx);
-        if (message && this.messageHandler) {
-          await this.messageHandler(message);
-        }
+        const firstName = ctx.from?.first_name;
+        const lastName = ctx.from?.last_name;
+        const userName =
+          [firstName, lastName].filter(Boolean).join(' ') ||
+          ctx.from?.username ||
+          'bạn';
+
+        const homepage = getHomepageTemplate(userName);
+
+        await ctx.reply(homepage, {
+          parse_mode: 'HTML',
+          reply_markup: {
+            inline_keyboard: [
+              [
+                { text: 'Tính thuế', callback_data: 'Tính thuế' },
+                { text: 'Tra cứu quy định', callback_data: 'Tra cứu quy định' },
+                { text: 'Hướng dẫn kê khai', callback_data: 'Hướng dẫn kê khai' },
+              ],
+              [
+                { text: 'Hỗ trợ SME', callback_data: 'Hỗ trợ SME' },
+                { text: 'Câu hỏi mẫu', callback_data: 'Câu hỏi mẫu' },
+              ],
+            ],
+          },
+        });
+        logger.info('/start command processed', { userId: ctx.from?.id, chatId: ctx.chat?.id });
       } catch (error) {
-        logger.error('Error processing Telegram message', { error });
+        logger.error('Failed to process /start command', { error, userId: ctx.from?.id });
+        try {
+          await ctx.reply('Xin lỗi, có lỗi xảy ra khi xử lý lệnh /start. Vui lòng thử lại sau.');
+        } catch { /* ignore */ }
       }
     });
 
-    // Handle inline keyboard button clicks (callback_query)
+    this.bot.command('help', async (ctx) => {
+      await ctx.reply(
+        'Các lệnh hỗ trợ:\n' +
+        '/start - Bắt đầu cuộc trò chuyện\n' +
+        '/help - Hiển thị trợ giúp\n' +
+        '/loai <SME|hogiadia|cathe> - Đặt loại khách hàng\n' +
+        '/reset - Đặt lại phiên trò chuyện\n\n' +
+        'Hoặc bạn có thể gửi trực tiếp câu hỏi về thuế.',
+      );
+    });
+
+    // ── Generic message handler ────────────────────────────────────────────
+    // Catch-all for all non-command messages. Registered AFTER command
+    // handlers so commands are consumed first and never reach here.
+    this.bot.on('message', async (ctx: Context<Update.MessageUpdate>) => {
+      this.lastUpdateTime = Date.now();
+      const messageId = ctx.message?.message_id;
+      const userId = ctx.from?.id;
+      const chatId = ctx.chat?.id;
+      const text = 'text' in ctx.message ? ctx.message.text : '[non-text message]';
+
+      // Send "typing..." immediately so the user sees feedback right away.
+      // Telegram's typing indicator auto-expires after ~5 s, so we refresh
+      // it every 4 s while the message is being processed.
+      let typingInterval: ReturnType<typeof setInterval> | null = null;
+      if (chatId) {
+        ctx.telegram.sendChatAction(chatId, 'typing').catch(() => {});
+        typingInterval = setInterval(() => {
+          ctx.telegram.sendChatAction(chatId, 'typing').catch(() => {});
+        }, 4000);
+      }
+
+      try {
+        logger.debug('Received Telegram message', {
+          messageId,
+          userId,
+          chatId,
+          textPreview: typeof text === 'string' ? text.slice(0, 100) : text,
+        });
+
+        const message = mapTelegramMessage(ctx);
+        if (message && this.messageHandler) {
+          await this.messageHandler(message);
+          logger.debug('Telegram message processed successfully', { messageId, userId, chatId });
+        } else {
+          logger.warn('No message handler or mapped message', { messageId, userId, chatId });
+        }
+      } catch (error) {
+        logger.error('Error processing Telegram message', {
+          error: error instanceof Error ? error.message : String(error),
+          stack: error instanceof Error ? error.stack : undefined,
+          messageId,
+          userId,
+          chatId,
+        });
+        
+        // Try to send error message to user
+        try {
+          if (chatId && typeof text === 'string') {
+            await ctx.reply('Xin lỗi, tôi gặp sự cố khi xử lý tin nhắn của bạn. Vui lòng thử lại sau.');
+          }
+        } catch (sendError) {
+          logger.error('Failed to send error message for Telegram message', {
+            sendError: sendError instanceof Error ? sendError.message : String(sendError),
+            messageId,
+            userId,
+            chatId,
+          });
+        }
+      } finally {
+        if (typingInterval) clearInterval(typingInterval);
+      }
+    });
+
+    // ── Inline keyboard button clicks ─────────────────────────────────────
     this.bot.on('callback_query', async (ctx) => {
       this.lastUpdateTime = Date.now();
+      // Answer the callback query immediately to remove the loading spinner
+      // on the button, then send a typing indicator while we process.
+      await ctx.answerCbQuery().catch(() => {});
+
+      const cbQuery = ctx.callbackQuery;
+      if (!('data' in cbQuery) || !cbQuery.data) return;
+
+      const from = cbQuery.from;
+      const chatId = cbQuery.message?.chat?.id;
+      if (!chatId) return;
+
+      // Typing indicator — start immediately and refresh every 4 s.
+      ctx.telegram.sendChatAction(chatId, 'typing').catch(() => {});
+      const typingInterval = setInterval(() => {
+        ctx.telegram.sendChatAction(chatId, 'typing').catch(() => {});
+      }, 4000);
+
       try {
-        // Acknowledge the callback to remove loading state on the button
-        await ctx.answerCbQuery();
-
-        const cbQuery = ctx.callbackQuery;
-        if (!('data' in cbQuery) || !cbQuery.data) return;
-
-        const from = cbQuery.from;
-        const chatId = cbQuery.message?.chat?.id;
-        if (!chatId) return;
-
         const firstName = from.first_name || undefined;
         const lastName = from.last_name || undefined;
         const telegramUsername = from.username || undefined;
@@ -116,37 +227,56 @@ export class TelegramAdapter implements ChannelAdapter {
         }
       } catch (error) {
         logger.error('Error processing Telegram callback query', { error });
+      } finally {
+        clearInterval(typingInterval);
       }
     });
 
     // Bot commands
     this.bot.command('start', async (ctx) => {
       try {
-        await ctx.reply(
-          'Xin chào! Tôi là Trợ lý Thuế ảo. 🇻🇳\n\n' +
-          'Tôi có thể hỗ trợ bạn các vấn đề về:\n' +
-          '• Thuế GTGT (VAT)\n' +
-          '• Thuế thu nhập doanh nghiệp (CIT)\n' +
-          '• Thuế thu nhập cá nhân (PIT)\n' +
-          '• Thuế môn bài\n' +
-          '• Kê khai và nộp thuế\n\n' +
-          'Hãy gửi câu hỏi của bạn để tôi hỗ trợ!',
-        );
+        logger.info('Processing /start command', {
+          userId: ctx.from?.id,
+          chatId: ctx.chat?.id,
+        });
+
+        const serviceMenu =
+          'Xin chào! Tôi là "Bé Thuế" - Trợ lý Thuế ảo. 🇻🇳\n\n' +
+          'Tôi có thể hỗ trợ bạn:\n\n' +
+          '1. **Tính thuế (GTGT, TNDN, TNCN, Môn bài)**\n' +
+          '   Ví dụ: "Tính thuế TNCN lương 20 triệu"\n\n' +
+          '2. **Hướng dẫn kê khai và nộp thuế**\n' +
+          '   Ví dụ: "Cách kê khai thuế GTGT tháng 3?"\n\n' +
+          '3. **Thời hạn nộp thuế**\n' +
+          '   Ví dụ: "Hạn nộp thuế môn bài 2025 là khi nào?"\n\n' +
+          '4. **Đăng ký mã số thuế**\n' +
+          '   Ví dụ: "Thủ tục đăng ký MST cá nhân"\n\n' +
+          '5. **Dịch vụ tư vấn về thuế với các dẫn chứng từ văn bản pháp luật**\n' +
+          '   Ví dụ: "Tra cứu thông tư 78/2014/TT-BTC"\n\n' +
+          'Hãy gửi câu hỏi của bạn để tôi hỗ trợ!';
+
+        await ctx.reply(serviceMenu, {
+          parse_mode: 'Markdown',
+        });
+
         logger.info('/start command processed successfully', {
           userId: ctx.from?.id,
-          chatId: ctx.chat?.id
+          chatId: ctx.chat?.id,
         });
       } catch (error) {
-        logger.error('Failed to process /start command', {
-          error,
+        logger.error('Error processing /start command', {
+          error: error instanceof Error ? error.message : String(error),
           userId: ctx.from?.id,
-          chatId: ctx.chat?.id
+          chatId: ctx.chat?.id,
         });
+
         // Try to send error message to user
         try {
-          await ctx.reply('Xin lỗi, có lỗi xảy ra khi xử lý lệnh /start. Vui lòng thử lại sau.');
-        } catch {
-          // Ignore if we can't send error message
+          await ctx.reply('Xin lỗi, tôi gặp sự cố khi xử lý lệnh /start. Vui lòng thử lại sau.');
+        } catch (sendError) {
+          logger.error('Failed to send error message for /start command', {
+            sendError: sendError instanceof Error ? sendError.message : String(sendError),
+          });
         }
       }
     });
@@ -161,6 +291,7 @@ export class TelegramAdapter implements ChannelAdapter {
         'Hoặc bạn có thể gửi trực tiếp câu hỏi về thuế.',
       );
     });
+
 
     // Setup webhook or polling.
     // Prefer webhook when TELEGRAM_WEBHOOK_URL is set (any environment).
@@ -188,7 +319,7 @@ export class TelegramAdapter implements ChannelAdapter {
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       try {
         await this.bot.telegram.deleteWebhook({ drop_pending_updates: false });
-        await this.bot.launch({ dropPendingUpdates: false });
+        this.bot.launch({ dropPendingUpdates: false });
         logger.info('Telegram bot started in polling mode');
         this.setupPollingWatchdog();
         return;
@@ -212,17 +343,31 @@ export class TelegramAdapter implements ChannelAdapter {
   }
 
   private setupPollingWatchdog(): void {
-    // Watchdog: restart polling if no updates for 10 minutes.
-    // Threshold is generous to avoid unnecessary restarts when the bot
-    // simply has no incoming messages (previously 2 min — too aggressive,
-    // caused burst API calls every 60s that interfered with other bots).
+    // Watchdog: only restart polling if Telegram API itself is unreachable,
+    // NOT just because there are no incoming messages (idle bot is healthy bot).
+    // Using getMe() as a real connectivity probe avoids spurious 409 Conflicts
+    // that occur when stop()+launch() race with Telegram's open long-poll connection.
     this.watchdogTimer = setInterval(async () => {
       if (!this.isPollingHealthy(600_000)) {
+        // Probe Telegram API to confirm connectivity before restarting.
+        try {
+          await this.bot.telegram.getMe();
+          // API reachable — bot is idle but polling is fine, reset the timer.
+          this.lastUpdateTime = Date.now();
+          return;
+        } catch {
+          // Cannot reach Telegram — polling is genuinely broken, restart needed.
+        }
+
         logger.warn('Telegram polling watchdog: no updates for 10 min, restarting polling');
         try {
           this.bot.stop('SIGTERM');
+          // Wait for Telegram to close the existing long-poll connection before
+          // opening a new one. Without this delay the new getUpdates call races
+          // with the old one and Telegram returns a 409 Conflict, killing polling.
+          await new Promise((r) => setTimeout(r, 5000));
           await this.bot.telegram.deleteWebhook({ drop_pending_updates: false });
-          await this.bot.launch({ dropPendingUpdates: false });
+          this.bot.launch({ dropPendingUpdates: false });
           this.lastUpdateTime = Date.now();
           logger.info('Telegram polling restarted by watchdog');
         } catch (err) {
@@ -253,22 +398,23 @@ export class TelegramAdapter implements ChannelAdapter {
           ? { reply_markup: { inline_keyboard: keyboard } }
           : {};
 
+        const htmlChunk = markdownToHtml(chunks[i]);
+
         try {
-          // Try HTML parse mode first for nice formatting
-          await this.bot.telegram.sendMessage(telegramChatId, chunks[i], {
+          // Send with HTML parse mode after markdown→HTML conversion
+          await this.bot.telegram.sendMessage(telegramChatId, htmlChunk, {
             parse_mode: 'HTML',
             ...replyMarkup,
           });
         } catch (htmlError: any) {
-          // If HTML parsing fails (LLM response contains <, >, & etc.),
-          // fall back to plain text
+          // If HTML parsing still fails, fall back to plain text
           if (htmlError?.message?.includes("can't parse entities")) {
             logger.warn('Telegram HTML parse failed, falling back to plain text', {
               chatId,
               chunkIndex: i,
               error: htmlError.message,
             });
-            await this.bot.telegram.sendMessage(telegramChatId, chunks[i], {
+            await this.bot.telegram.sendMessage(telegramChatId, stripMarkdown(chunks[i]), {
               ...replyMarkup,
             });
           } else {
@@ -319,11 +465,13 @@ export class TelegramAdapter implements ChannelAdapter {
         pendingUpdate = null;
         if (!accumulated) return;
         try {
+          const progressHtml = markdownToHtml(accumulated + ' ▍');
           await this.bot.telegram.editMessageText(
             telegramChatId,
             messageId,
             undefined,
-            accumulated + ' ▍',  // blinking cursor effect
+            progressHtml,
+            { parse_mode: 'HTML' },
           );
         } catch (editErr: any) {
           // "message is not modified" is harmless (same content)
@@ -365,13 +513,15 @@ export class TelegramAdapter implements ChannelAdapter {
             ? { reply_markup: { inline_keyboard: keyboard } }
             : {};
 
+          const finalHtml = markdownToHtml(finalText);
+
           try {
             await bot.telegram.editMessageText(
               telegramChatId,
               messageId,
               undefined,
-              finalText,
-              replyMarkup,
+              finalHtml,
+              { parse_mode: 'HTML', ...replyMarkup },
             );
           } catch (editErr: any) {
             if (!editErr?.message?.includes('message is not modified')) {

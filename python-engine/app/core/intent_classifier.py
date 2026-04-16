@@ -35,6 +35,10 @@ class Intent(str, Enum):
     PENALTY = "penalty"  # Phạt, vi phạm thuế
     DISPUTE = "dispute"  # Khiếu nại, tranh chấp
 
+    # Profile management
+    PROFILE = "profile"              # Xem thông tin cá nhân
+    PROFILE_EDIT = "profile_edit"    # Sửa thông tin cá nhân
+
     # General
     GREETING = "greeting"
     HELP = "help"
@@ -91,6 +95,13 @@ _INTENT_PATTERNS: list[tuple[Intent, list[str]]] = [
     (Intent.PENALTY, [
         r"phạt", r"vi phạm", r"chậm nộp", r"trốn thuế",
         r"xử phạt", r"tiền phạt",
+    ]),
+    (Intent.PROFILE_EDIT, [
+        r"(?:đổi|thay đổi|cập nhật|update|sửa|chỉnh sửa|edit)\s+.+\s+(?:thành|sang|là)\s+",
+    ]),
+    (Intent.PROFILE, [
+        r"thông tin của tôi", r"hồ sơ của tôi", r"xem profile",
+        r"^/profile\b", r"profile của tôi", r"thông tin cá nhân",
     ]),
     (Intent.GREETING, [
         r"^(xin )?chào", r"^hello", r"^hi\b", r"^hey",

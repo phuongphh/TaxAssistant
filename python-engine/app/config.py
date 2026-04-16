@@ -30,10 +30,16 @@ class Settings(BaseSettings):
     openai_base_url: str = "https://api.z.ai/api/paas/v4/"
     llm_model: str = "glm-5"
     llm_temperature: float = 0.3
-    embedding_model: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+    embedding_model: str = "voyage-multilingual-2"
+
+    # Voyage AI (Embeddings)
+    voyage_api_key: str = ""
 
     # ChromaDB
     chroma_persist_dir: str = "./data/chroma"
+
+    # Telegram (used by notification scheduler to send messages directly)
+    telegram_bot_token: str = ""
 
     # Document Processing
     tesseract_lang: str = "vie"

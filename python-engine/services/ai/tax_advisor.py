@@ -779,13 +779,11 @@ class TaxAdvisor:
         else:
             greeting = ""
 
+        from app.core.onboarding import SERVICE_MENU
+
         reply = (
             f"{greeting}Tôi có thể hỗ trợ bạn các dịch vụ sau:\n\n"
-            "1. Tính thuế (GTGT, TNDN, TNCN, Môn bài)\n"
-            "2. Hướng dẫn kê khai & quyết toán thuế\n"
-            "3. Tra cứu quy định & văn bản pháp luật\n"
-            "4. Hạn nộp thuế\n"
-            "5. Thủ tục đăng ký mã số thuế\n\n"
+            f"{SERVICE_MENU}\n\n"
             "Bạn có thể gõ số hoặc mô tả câu hỏi cụ thể, ví dụ:\n"
             '• "Tính thuế GTGT doanh thu 500 triệu"\n'
             '• "Thuế TNCN lương 30 triệu 2 người phụ thuộc"\n'
@@ -804,6 +802,8 @@ class TaxAdvisor:
         )
 
     def _get_greeting(self, customer_type: CustomerType) -> str:
+        from app.core.onboarding import SERVICE_MENU
+
         type_label = {
             CustomerType.SME: " (Doanh nghiệp)",
             CustomerType.HOUSEHOLD: " (Hộ gia đình)",
@@ -812,11 +812,7 @@ class TaxAdvisor:
 
         return (
             f"Xin chào{type_label}! Tôi là Trợ lý Thuế ảo.\n\n"
-            "Tôi có thể hỗ trợ bạn:\n"
-            "• Tính thuế (GTGT, TNDN, TNCN, Môn bài)\n"
-            "• Tra cứu quy định thuế\n"
-            "• Hướng dẫn thủ tục kê khai\n"
-            "• Kiểm tra hóa đơn, chứng từ\n\n"
+            f"{SERVICE_MENU}\n\n"
             "Hãy gửi câu hỏi của bạn!"
         )
 

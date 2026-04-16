@@ -6,6 +6,71 @@ import { logger } from '../utils/logger';
 import { TaxEngineError } from '../utils/errors';
 import { SessionData, CustomerProfile, ActiveCase } from '../session/store';
 
+// Circuit breaker implementation
+class CircuitBreaker {
+  private failures = 0;
+  private lastFailureTime = 0;
+  private state: 'CLOSED' | 'OPEN' | 'HALF_OPEN' = 'CLOSED';
+  private readonly failureThreshold = 5;
+  private readonly resetTimeout = 30000; // 30 seconds
+  private readonly halfOpenTimeout = 10000; // 10 seconds
+
+  canRequest(): boolean {
+    const now = Date.now();
+    
+    switch (this.state) {
+      case 'CLOSED':
+        return true;
+        
+      case 'OPEN':
+        if (now - this.lastFailureTime > this.resetTimeout) {
+          this.state = 'HALF_OPEN';
+          logger.info('Circuit breaker moving to HALF_OPEN state');
+          return true;
+        }
+        return false;
+        
+      case 'HALF_OPEN':
+        if (now - this.lastFailureTime > this.halfOpenTimeout) {
+          return true;
+        }
+        return false;
+    }
+  }
+
+  recordSuccess(): void {
+    if (this.state === 'HALF_OPEN') {
+      this.state = 'CLOSED';
+      this.failures = 0;
+      logger.info('Circuit breaker reset to CLOSED state after successful request');
+    }
+  }
+
+  recordFailure(): void {
+    this.failures++;
+    this.lastFailureTime = Date.now();
+    
+    if (this.state === 'CLOSED' && this.failures >= this.failureThreshold) {
+      this.state = 'OPEN';
+      logger.warn('Circuit breaker tripped to OPEN state', {
+        failures: this.failures,
+        lastFailureTime: new Date(this.lastFailureTime).toISOString(),
+      });
+    } else if (this.state === 'HALF_OPEN') {
+      this.state = 'OPEN';
+      logger.warn('Circuit breaker re-opened after failed half-open attempt');
+    }
+  }
+
+  getState(): string {
+    return this.state;
+  }
+
+  getFailureCount(): number {
+    return this.failures;
+  }
+}
+
 // Load proto definition
 const PROTO_PATH = path.resolve(__dirname, '../../../proto/tax_service.proto');
 
@@ -61,6 +126,9 @@ export interface StreamChunk {
 export class TaxEngineClient {
   private client: any;
   private connected = false;
+  private circuitBreaker: CircuitBreaker;
+  private connectionAttempts = 0;
+  private readonly maxConnectionAttempts = 3;
 
   constructor() {
     this.client = new proto.taxassistant.TaxEngine(
@@ -69,23 +137,57 @@ export class TaxEngineClient {
       {
         'grpc.keepalive_time_ms': 30000,
         'grpc.keepalive_timeout_ms': 5000,
+        'grpc.service_config': JSON.stringify({
+          methodConfig: [{
+            name: [{ service: 'taxassistant.TaxEngine' }],
+            retryPolicy: {
+              maxAttempts: 3,
+              initialBackoff: '1s',
+              maxBackoff: '5s',
+              backoffMultiplier: 2,
+              retryableStatusCodes: ['UNAVAILABLE', 'DEADLINE_EXCEEDED'],
+            },
+          }],
+        }),
       },
     );
+    this.circuitBreaker = new CircuitBreaker();
   }
 
   /**
    * Wait for the gRPC channel to be ready
    */
   async connect(timeoutMs = 5000): Promise<void> {
+    if (!this.circuitBreaker.canRequest()) {
+      throw new TaxEngineError('Tax Engine service unavailable (circuit breaker open)');
+    }
+
     return new Promise((resolve, reject) => {
       const deadline = new Date(Date.now() + timeoutMs);
       this.client.waitForReady(deadline, (err: Error | null) => {
         if (err) {
-          logger.error('Failed to connect to Tax Engine gRPC', { error: err.message });
-          reject(new TaxEngineError('Tax Engine service unavailable'));
+          this.circuitBreaker.recordFailure();
+          this.connectionAttempts++;
+          
+          logger.error('Failed to connect to Tax Engine gRPC', {
+            error: err.message,
+            connectionAttempts: this.connectionAttempts,
+            circuitBreakerState: this.circuitBreaker.getState(),
+          });
+          
+          if (this.connectionAttempts >= this.maxConnectionAttempts) {
+            reject(new TaxEngineError(`Tax Engine service unavailable after ${this.connectionAttempts} attempts`));
+          } else {
+            reject(new TaxEngineError('Tax Engine service temporarily unavailable'));
+          }
         } else {
           this.connected = true;
-          logger.info('Connected to Tax Engine gRPC', { address: config.taxEngine.grpcAddress });
+          this.connectionAttempts = 0;
+          this.circuitBreaker.recordSuccess();
+          logger.info('Connected to Tax Engine gRPC', {
+            address: config.taxEngine.grpcAddress,
+            circuitBreakerState: this.circuitBreaker.getState(),
+          });
           resolve();
         }
       });
@@ -93,16 +195,29 @@ export class TaxEngineClient {
   }
 
   /**
-   * Send a tax-related message for processing
+   * Build the gRPC ProcessMessage request payload.
+   * Shared by both processMessage (unary) and processMessageStream (server-streaming)
+   * to avoid duplication and ensure both RPCs stay in sync.
    */
-  async processMessage(
+  private buildProcessMessageRequest(
     requestId: string,
     message: string,
     session: SessionData,
     customerProfile?: CustomerProfile,
     activeCases?: ActiveCase[],
     conversationSummaries?: string[],
-  ): Promise<TaxEngineResponse> {
+  ): Record<string, unknown> {
+    // Check circuit breaker before building the request
+    if (!this.circuitBreaker.canRequest()) {
+      logger.warn('Circuit breaker open, rejecting gRPC request', {
+        requestId,
+        circuitBreakerState: this.circuitBreaker.getState(),
+        failureCount: this.circuitBreaker.getFailureCount(),
+      });
+      throw new TaxEngineError('Tax Engine service temporarily unavailable. Please try again later.');
+    }
+
+
     // Send the last 10 conversation entries (5 turns) so the LLM has
     // enough context to remember earlier information like customer type.
     const recentHistory = (session.conversationHistory || []).slice(-10).map((entry) => ({
@@ -125,7 +240,6 @@ export class TaxEngineClient {
       conversationHistory: recentHistory,
     };
 
-    // Attach customer profile for long-term memory
     if (customerProfile) {
       request.customerProfile = {
         customerId: customerProfile.customerId,
@@ -145,10 +259,11 @@ export class TaxEngineClient {
         onboardingStep: customerProfile.onboardingStep,
         taxProfile: customerProfile.taxProfile || {},
         recentNotes: customerProfile.recentNotes || [],
+        taxPeriod: customerProfile.taxPeriod || '',
+        hasEmployees: customerProfile.hasEmployees || '',
       };
     }
 
-    // Attach active support cases
     if (activeCases?.length) {
       request.activeCases = activeCases.map((c) => ({
         caseId: c.caseId,
@@ -160,16 +275,34 @@ export class TaxEngineClient {
       }));
     }
 
-    // Attach conversation summaries from long-term memory
     if (conversationSummaries?.length) {
       request.conversationSummaries = conversationSummaries;
     }
 
-    logger.info('gRPC processMessage: history=%d profile=%s cases=%d session=%s',
+    logger.info('gRPC processMessage: history=%d profile=%s cases=%d session=%s circuit=%s',
       recentHistory.length,
       customerProfile ? 'yes' : 'no',
       activeCases?.length ?? 0,
       session.sessionId,
+      this.circuitBreaker.getState(),
+    );
+
+    return request;
+  }
+
+  /**
+   * Send a tax-related message for processing (unary RPC).
+   */
+  async processMessage(
+    requestId: string,
+    message: string,
+    session: SessionData,
+    customerProfile?: CustomerProfile,
+    activeCases?: ActiveCase[],
+    conversationSummaries?: string[],
+  ): Promise<TaxEngineResponse> {
+    const request = this.buildProcessMessageRequest(
+      requestId, message, session, customerProfile, activeCases, conversationSummaries,
     );
 
     const startMs = Date.now();
@@ -177,19 +310,29 @@ export class TaxEngineClient {
       this.client.processMessage(request, { deadline: this.deadline(180000) }, (err: any, response: any) => {
         const elapsedMs = Date.now() - startMs;
         if (err) {
+          this.circuitBreaker.recordFailure();
           logger.error('gRPC ProcessMessage error', {
             code: err.code,
             message: err.message,
             details: err.details,
             elapsedMs,
             requestId,
+            circuitBreakerState: this.circuitBreaker.getState(),
+            failureCount: this.circuitBreaker.getFailureCount(),
           });
           reject(new TaxEngineError(`Tax Engine error: ${err.message}`));
         } else {
+          if (!response) {
+            this.circuitBreaker.recordFailure();
+            reject(new TaxEngineError('Tax Engine returned empty response'));
+            return;
+          }
+          this.circuitBreaker.recordSuccess();
           logger.debug('gRPC ProcessMessage OK', {
             requestId,
             elapsedMs,
             replyLength: response?.reply?.length ?? 0,
+            circuitBreakerState: this.circuitBreaker.getState(),
           });
           resolve(response as TaxEngineResponse);
         }
@@ -198,7 +341,7 @@ export class TaxEngineClient {
   }
 
   /**
-   * Stream a tax-related message for progressive response.
+   * Stream a tax-related message for progressive response (server-streaming RPC).
    * Calls onChunk for each token/chunk as it arrives from the LLM.
    * Returns the fully assembled TaxEngineResponse when done.
    */
@@ -211,62 +354,9 @@ export class TaxEngineClient {
     activeCases?: ActiveCase[],
     conversationSummaries?: string[],
   ): Promise<TaxEngineResponse> {
-    const recentHistory = (session.conversationHistory || []).slice(-10).map((entry) => ({
-      role: entry.role,
-      content: entry.content,
-      timestamp: entry.timestamp,
-    }));
-
-    const request: Record<string, unknown> = {
-      requestId,
-      message,
-      language: 'vi',
-      context: {
-        sessionId: session.sessionId,
-        userId: session.userId,
-        customerType: mapCustomerType(session.customerType),
-        previousTopics: [],
-        metadata: session.context as Record<string, string>,
-      },
-      conversationHistory: recentHistory,
-    };
-
-    if (customerProfile) {
-      request.customerProfile = {
-        customerId: customerProfile.customerId,
-        channel: customerProfile.channel,
-        channelUserId: customerProfile.channelUserId,
-        username: customerProfile.username || '',
-        firstName: customerProfile.firstName || '',
-        lastName: customerProfile.lastName || '',
-        displayName: customerProfile.displayName || '',
-        customerType: customerProfile.customerType,
-        businessName: customerProfile.businessName,
-        taxCode: customerProfile.taxCode,
-        industry: customerProfile.industry,
-        province: customerProfile.province,
-        annualRevenueRange: customerProfile.annualRevenueRange,
-        employeeCountRange: customerProfile.employeeCountRange,
-        onboardingStep: customerProfile.onboardingStep,
-        taxProfile: customerProfile.taxProfile || {},
-        recentNotes: customerProfile.recentNotes || [],
-      };
-    }
-
-    if (activeCases?.length) {
-      request.activeCases = activeCases.map((c) => ({
-        caseId: c.caseId,
-        customerId: c.customerId,
-        serviceType: c.serviceType,
-        title: c.title,
-        status: c.status,
-        currentStep: c.currentStep,
-      }));
-    }
-
-    if (conversationSummaries?.length) {
-      request.conversationSummaries = conversationSummaries;
-    }
+    const request = this.buildProcessMessageRequest(
+      requestId, message, session, customerProfile, activeCases, conversationSummaries,
+    );
 
     const startMs = Date.now();
     return new Promise((resolve, reject) => {
@@ -399,6 +489,10 @@ export class TaxEngineClient {
           logger.error('gRPC GetOrCreateCustomer error', { code: err.code, message: err.message });
           reject(new TaxEngineError(`Customer lookup error: ${err.message}`));
         } else {
+          if (!response) {
+            reject(new TaxEngineError('Tax Engine returned empty customer response'));
+            return;
+          }
           resolve({
             customerId: response.customerId || '',
             channel: response.channel || '',
@@ -417,6 +511,8 @@ export class TaxEngineClient {
             onboardingStep: response.onboardingStep || 'new',
             taxProfile: response.taxProfile || {},
             recentNotes: response.recentNotes || [],
+            taxPeriod: response.taxPeriod || '',
+            hasEmployees: response.hasEmployees || '',
           });
         }
       });

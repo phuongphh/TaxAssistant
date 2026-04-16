@@ -30,33 +30,36 @@ SERVICE_MENU = (
     "1. Tính thuế (GTGT, TNDN, TNCN, Môn bài)\n"
     "2. Hướng dẫn kê khai & quyết toán thuế\n"
     "3. Đăng ký mã số thuế\n"
-    "4. Tra cứu quy định & văn bản pháp luật\n"
-    "5. Kiểm tra hóa đơn, chứng từ\n"
+    "4. Kiểm tra hóa đơn, chứng từ\n"
+    "5. Dịch vụ tư vấn về thuế với các dẫn chứng từ văn bản pháp luật\n"
     "6. Tư vấn xử phạt & vi phạm thuế\n"
     "7. Hỗ trợ hoàn thuế GTGT\n"
-    "8. Quyết toán thuế năm"
+    "8. Quyết toán thuế năm\n"
+    "9. Thông tin của tôi 👤"
 )
 
 SERVICE_TYPE_MAP = {
     "1": "tax_calculation",
     "2": "tax_declaration",
     "3": "tax_registration",
-    "4": "tax_consultation",
-    "5": "invoice_check",
+    "4": "invoice_check",
+    "5": "tax_consultation",
     "6": "penalty_consultation",
     "7": "tax_refund",
     "8": "annual_settlement",
+    "9": "profile",
 }
 
 SERVICE_TITLE_MAP = {
     "tax_calculation": "Tính thuế",
     "tax_declaration": "Kê khai & quyết toán thuế",
     "tax_registration": "Đăng ký mã số thuế",
-    "tax_consultation": "Tư vấn quy định thuế",
     "invoice_check": "Kiểm tra hóa đơn, chứng từ",
+    "tax_consultation": "Dịch vụ tư vấn về thuế với các dẫn chứng từ văn bản pháp luật",
     "penalty_consultation": "Tư vấn xử phạt & vi phạm thuế",
     "tax_refund": "Hoàn thuế GTGT",
     "annual_settlement": "Quyết toán thuế năm",
+    "profile": "Thông tin của tôi",
 }
 
 # Map user input to customer type
@@ -251,7 +254,8 @@ class OnboardingHandler:
             "actions": [
                 {"label": "Tính thuế", "action_type": "quick_reply", "payload": "tính thuế"},
                 {"label": "Kê khai thuế", "action_type": "quick_reply", "payload": "kê khai thuế"},
-                {"label": "Tra cứu quy định", "action_type": "quick_reply", "payload": "tra cứu quy định thuế"},
+                {"label": "Hạn nộp thuế", "action_type": "quick_reply", "payload": "hạn nộp thuế"},
+                {"label": "Đăng ký MST", "action_type": "quick_reply", "payload": "đăng ký mã số thuế"},
             ],
             "update_fields": update_fields,
             "onboarding_complete": True,
@@ -274,7 +278,8 @@ class OnboardingHandler:
             "actions": [
                 {"label": "Tính thuế", "action_type": "quick_reply", "payload": "tính thuế"},
                 {"label": "Kê khai thuế", "action_type": "quick_reply", "payload": "kê khai thuế"},
-                {"label": "Tra cứu quy định", "action_type": "quick_reply", "payload": "tra cứu quy định thuế"},
+                {"label": "Hạn nộp thuế", "action_type": "quick_reply", "payload": "hạn nộp thuế"},
+                {"label": "Đăng ký MST", "action_type": "quick_reply", "payload": "đăng ký mã số thuế"},
             ],
             "update_fields": {},
             "onboarding_complete": False,

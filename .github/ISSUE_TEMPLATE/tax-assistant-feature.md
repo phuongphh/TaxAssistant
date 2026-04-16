@@ -1,14 +1,5 @@
 ---
 name: Tax Assistant Feature
-about: Feature template for Tax Assistant (tax compliance required)
-title: ''
-labels: ''
-assignees: ''
-
----
-
----
-name: Tax Assistant Feature
 about: Feature for Tax Assistant with compliance requirement
 title: "[FEATURE] "
 labels: feature
