@@ -29,17 +29,17 @@ export function createServer(deps: ServerDependencies): Express {
   app.use(helmet());
   app.use(cors());
   app.use(compression());
-  app.use(express.json({ limit: '5mb' }));
-  app.use(requestLogger);
-
-  // === Health routes (no rate limiting) ===
-  app.use(healthRouter);
-
   // === Webhook routes ===
   // Telegram webhook — mount whenever webhook URL is configured (any env)
   if (config.telegram.webhookUrl) {
     app.use(deps.telegramAdapter.getWebhookCallback());
   }
+
+  app.use(express.json({ limit: '5mb' }));
+  app.use(requestLogger);
+
+  // === Health routes (no rate limiting) ===
+  app.use(healthRouter);
 
   // Zalo webhook
   app.use(createZaloWebhookRouter(deps.zaloAdapter));
