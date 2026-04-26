@@ -340,6 +340,13 @@ pytest tests/ -v
 | `CreateSupportCase` | Create a new support case |
 | `UpdateSupportCase` | Update case step/status |
 
+## Documentation
+
+- 🎯 [Retention Strategy](docs/strategy/retention-strategy.md) — vision, retention goals, phase 1 spec
+- 🤖 [CLAUDE.md](CLAUDE.md) — technical conventions for AI agents
+- 📚 [Docs Hub](docs/README.md) — full documentation index
+- 🐛 [Issues Workflow](docs/issues/README.md) — active/closed issue mirror + lifecycle automation
+
 ## License
 
 Private - All rights reserved.
