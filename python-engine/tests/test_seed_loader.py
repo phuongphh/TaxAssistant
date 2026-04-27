@@ -116,8 +116,12 @@ class TestSeedFileStructure:
                 docs = json.load(f)
             total += len(docs)
 
-        # 4 VAT + 3 CIT + 3 PIT + 2 License + 4 Procedure = 16
-        assert total == 16, f"Expected 16 total documents, got {total}"
+        # 4 VAT + 3 CIT + 4 PIT + 4 License + 4 Procedure = 19
+        # License was bumped from 2 → 4 in Issue #71: added Nghị quyết
+        # 198/2025/QH15 and Nghị định 362/2025/NĐ-CP (abolish lệ phí môn bài
+        # from 01/01/2026) while keeping the historical NĐ 139/2016 and
+        # 22/2020 marked as expired for users still settling kỳ ≤ 2025.
+        assert total == 19, f"Expected 19 total documents, got {total}"
 
 
 # ---------------------------------------------------------------------------
@@ -131,7 +135,7 @@ class TestSeedLoaderFunctions:
         """load_seed_files should return all documents from all files."""
         from data.seed_loader import load_seed_files
         docs = load_seed_files()
-        assert len(docs) == 16
+        assert len(docs) == 19
 
     def test_load_seed_files_all_have_document_number(self):
         """Every loaded document must have a document_number."""
@@ -215,8 +219,8 @@ class TestSeedVectorStore:
             docs = load_seed_files()
             count = await seed_vector_store(docs)
 
-            assert count == 16
-            assert mock_rag.index_regulation.call_count == 16
+            assert count == 19
+            assert mock_rag.index_regulation.call_count == 19
         finally:
             # Restore original modules
             for mod_name, original in saved_modules.items():

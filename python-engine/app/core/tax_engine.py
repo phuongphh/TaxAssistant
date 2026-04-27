@@ -24,6 +24,54 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+# Prompts that ask the user to provide a numeric amount for calculation.
+# Used by `_detect_pending_calculation` to recognise follow-up messages where
+# the user supplies just the amount after one of these prompts.
+# Keep this in sync with the messages produced inside `_handle_calculation`.
+_AMOUNT_PROMPT_BY_CATEGORY: dict[TaxCategory, str] = {
+    TaxCategory.VAT: "Vui lòng cung cấp doanh thu để tính thuế GTGT (VD: 500 triệu)",
+    TaxCategory.CIT: "Vui lòng cung cấp thu nhập chịu thuế để tính thuế TNDN (VD: 1 tỷ)",
+    TaxCategory.PIT: "Vui lòng cung cấp thu nhập hàng tháng để tính thuế TNCN (VD: 30 triệu)",
+    TaxCategory.LICENSE: "Vui lòng cung cấp doanh thu hoặc vốn điều lệ để tính thuế Môn bài",
+}
+
+# Generic safe-fallback reply when every other path produced an empty answer.
+# Issue #72: must never let the bot return blank text — Telegram silently
+# rejects empty messages, leaving the user staring at a blank screen.
+_SAFE_FALLBACK_REPLY = (
+    "Xin lỗi, tôi chưa hiểu rõ yêu cầu của bạn. Bạn có thể thử:\n"
+    '• "Tính thuế GTGT doanh thu 500 triệu"\n'
+    '• "Thuế TNCN lương 30 triệu, 2 người phụ thuộc"\n'
+    '• "Hạn nộp thuế quý 2"\n\n'
+    "Hoặc gõ /help để xem hướng dẫn đầy đủ."
+)
+
+
+def _last_assistant_message(history: list[dict]) -> str:
+    """Return content of the most recent assistant turn (lowercased), or ''."""
+    for entry in reversed(history or []):
+        if entry.get("role") == "assistant":
+            return (entry.get("content") or "").lower()
+    return ""
+
+
+def _detect_pending_calculation(history: list[dict]) -> TaxCategory | None:
+    """If the last assistant turn was an 'please provide amount' prompt, return
+    the tax category that prompt was asking about. Otherwise return None.
+
+    This lets the engine recognise follow-up messages like "500 triệu" as the
+    completion of a pending calculation rather than treating them as a brand
+    new query (which would otherwise route to RAG and often return empty).
+    """
+    last = _last_assistant_message(history)
+    if not last:
+        return None
+    for category, prompt in _AMOUNT_PROMPT_BY_CATEGORY.items():
+        if prompt.lower() in last:
+            return category
+    return None
+
+
 class TaxEngine:
     """
     Main Tax Engine that processes user queries.
@@ -91,6 +139,31 @@ class TaxEngine:
 
         # 1. Classify intent
         classification = self.classifier.classify(message)
+
+        # 1b. Issue #72 fix: when the previous assistant turn was a
+        # "please provide amount" prompt and this message contains a money
+        # amount, recognise it as completing the pending calculation —
+        # otherwise the message ("500 triệu") goes to RAG with no context
+        # and frequently returns an empty reply (blank-screen bug).
+        pending_category = _detect_pending_calculation(history)
+        if (
+            pending_category is not None
+            and classification.extracted_entities.get("amount")
+            and classification.intent in (Intent.UNKNOWN, Intent.TAX_INFO)
+        ):
+            logger.info(
+                "Pending-calc completion detected: category=%s amount=%s — "
+                "promoting to TAX_CALCULATE",
+                pending_category.value,
+                classification.extracted_entities.get("amount"),
+            )
+            classification = ClassificationResult(
+                intent=Intent.TAX_CALCULATE,
+                tax_category=pending_category,
+                confidence=max(classification.confidence, 0.85),
+                extracted_entities=classification.extracted_entities,
+            )
+
         logger.info(
             "Classified: intent=%s category=%s confidence=%.2f rag=%s history=%d memory=%d msg='%s'",
             classification.intent.value,
@@ -318,14 +391,10 @@ class TaxEngine:
 
         # Check if we have enough data
         if not entities.get("amount"):
-            prompts = {
-                TaxCategory.VAT: "Vui lòng cung cấp doanh thu để tính thuế GTGT (VD: 500 triệu)",
-                TaxCategory.CIT: "Vui lòng cung cấp thu nhập chịu thuế để tính thuế TNDN (VD: 1 tỷ)",
-                TaxCategory.PIT: "Vui lòng cung cấp thu nhập hàng tháng để tính thuế TNCN (VD: 30 triệu)",
-                TaxCategory.LICENSE: "Vui lòng cung cấp doanh thu hoặc vốn điều lệ để tính thuế Môn bài",
-            }
             return self._build_response(
-                reply=prompts.get(category, "Vui lòng cung cấp thêm thông tin."),
+                reply=_AMOUNT_PROMPT_BY_CATEGORY.get(
+                    category, "Vui lòng cung cấp thêm thông tin."
+                ),
                 classification=classification,
             )
 
@@ -369,7 +438,7 @@ class TaxEngine:
                 conversation_history=history,
                 memory_context=memory_context,
             )
-            if rag_result.confidence > 0.4 and rag_result.answer:
+            if rag_result.confidence > 0.4 and rag_result.answer and rag_result.answer.strip():
                 references_list = [
                     {"title": s["title"], "url": s.get("url", ""), "snippet": s.get("snippet", "")}
                     for s in rag_result.sources
@@ -425,7 +494,7 @@ class TaxEngine:
                 conversation_history=history,
                 memory_context=memory_context,
             )
-            if rag_result.answer:
+            if rag_result.answer and rag_result.answer.strip():
                 references = [
                     {"title": s["title"], "url": s.get("url", ""), "snippet": s.get("snippet", "")}
                     for s in rag_result.sources
@@ -442,20 +511,29 @@ class TaxEngine:
             # User asked about declaration/filing procedure
             if customer_type in (CustomerType.HOUSEHOLD, CustomerType.INDIVIDUAL):
                 reply = (
-                    "Quy trình kê khai thuế cho Hộ kinh doanh / Cá nhân:\n\n"
-                    "📋 Bước 1: Xác định phương pháp tính thuế\n"
-                    "• Khoán: doanh thu ≤ 100 triệu/năm → miễn thuế GTGT, TNCN\n"
-                    "• Khoán: DT > 100 triệu → thuế GTGT 1-5%, TNCN 0.5-2%\n\n"
+                    "Quy trình kê khai thuế cho Hộ kinh doanh / Cá nhân (từ 01/01/2026):\n\n"
+                    "⚠️ Lưu ý quan trọng:\n"
+                    "• Phương pháp KHOÁN đã được bãi bỏ từ 01/01/2026\n"
+                    "  (Nghị quyết 198/2025/QH15, Điều 10).\n"
+                    "• Hộ KD chuyển sang phương pháp KÊ KHAI dựa trên doanh thu thực tế.\n\n"
+                    "📋 Bước 1: Xác định nghĩa vụ thuế\n"
+                    "• Doanh thu ≤ 200 triệu/năm: miễn thuế GTGT, TNCN\n"
+                    "  (xác nhận ngưỡng hiện hành với cơ quan thuế)\n"
+                    "• Doanh thu > 200 triệu: nộp GTGT (1-5%) và TNCN (0,5-2%)\n"
+                    "  theo tỷ lệ ngành (Thông tư 40/2021/TT-BTC)\n\n"
                     "📋 Bước 2: Chuẩn bị hồ sơ kê khai\n"
-                    "• Tờ khai thuế khoán (Mẫu 01/CNKD)\n"
-                    "• Sổ sách, hóa đơn bán hàng\n\n"
+                    "• Tờ khai dành cho hộ kê khai (Mẫu theo hướng dẫn của Tổng cục Thuế)\n"
+                    "• Sổ sách kế toán đơn giản, hóa đơn điện tử bán hàng\n\n"
                     "📋 Bước 3: Nộp tờ khai\n"
                     "• Qua eTax Mobile hoặc thuedientu.gdt.gov.vn\n"
                     "• Hoặc nộp trực tiếp tại Chi cục Thuế\n\n"
                     "📋 Bước 4: Nộp thuế\n"
                     "• Hạn: theo quý (ngày cuối tháng đầu quý sau)\n"
                     "• Quyết toán năm: trước 31/03 năm sau\n\n"
-                    "📎 Căn cứ: Thông tư 40/2021/TT-BTC"
+                    "📎 Căn cứ:\n"
+                    "• Nghị quyết 198/2025/QH15 (bãi bỏ thuế khoán + lệ phí môn bài)\n"
+                    "• Thông tư 40/2021/TT-BTC (tỷ lệ GTGT/TNCN trên doanh thu)\n\n"
+                    "Vui lòng xác nhận với cơ quan thuế nếu có thay đổi pháp luật gần đây."
                 )
             else:
                 reply = (
@@ -532,7 +610,7 @@ class TaxEngine:
                 conversation_history=history,
                 memory_context=memory_context,
             )
-            if rag_result.answer:
+            if rag_result.answer and rag_result.answer.strip():
                 references = [
                     {"title": s["title"], "url": s.get("url", ""), "snippet": s.get("snippet", "")}
                     for s in rag_result.sources
@@ -546,20 +624,29 @@ class TaxEngine:
         # Provide process-oriented answer (not just forms list)
         if customer_type in (CustomerType.HOUSEHOLD, CustomerType.INDIVIDUAL):
             reply = (
-                "Quy trình kê khai thuế cho Hộ kinh doanh / Cá nhân:\n\n"
-                "📋 Bước 1: Xác định phương pháp tính thuế\n"
-                "• Khoán: doanh thu ≤ 100 triệu/năm (miễn thuế GTGT, TNCN)\n"
-                "• Khoán: DT > 100 triệu → thuế GTGT 1-5%, TNCN 0.5-2%\n\n"
+                "Quy trình kê khai thuế cho Hộ kinh doanh / Cá nhân (từ 01/01/2026):\n\n"
+                "⚠️ Lưu ý quan trọng:\n"
+                "• Phương pháp KHOÁN đã được bãi bỏ từ 01/01/2026\n"
+                "  (Nghị quyết 198/2025/QH15, Điều 10).\n"
+                "• Hộ KD chuyển sang phương pháp KÊ KHAI dựa trên doanh thu thực tế.\n\n"
+                "📋 Bước 1: Xác định nghĩa vụ thuế\n"
+                "• Doanh thu ≤ 200 triệu/năm: miễn thuế GTGT, TNCN\n"
+                "  (xác nhận ngưỡng hiện hành với cơ quan thuế)\n"
+                "• Doanh thu > 200 triệu: nộp GTGT (1-5%) và TNCN (0,5-2%)\n"
+                "  theo tỷ lệ ngành (Thông tư 40/2021/TT-BTC)\n\n"
                 "📋 Bước 2: Chuẩn bị hồ sơ kê khai\n"
-                "• Tờ khai thuế khoán (Mẫu 01/CNKD)\n"
-                "• Sổ sách, hóa đơn bán hàng\n\n"
+                "• Tờ khai dành cho hộ kê khai (Mẫu theo hướng dẫn của Tổng cục Thuế)\n"
+                "• Sổ sách kế toán đơn giản, hóa đơn điện tử bán hàng\n\n"
                 "📋 Bước 3: Nộp tờ khai\n"
                 "• Kê khai qua eTax Mobile hoặc thuedientu.gdt.gov.vn\n"
                 "• Hoặc nộp trực tiếp tại Chi cục Thuế\n\n"
                 "📋 Bước 4: Nộp thuế\n"
                 "• Hạn nộp: theo quý (ngày cuối tháng đầu quý sau)\n"
                 "• Quyết toán năm: trước 31/03 năm sau\n\n"
-                "📎 Căn cứ: Thông tư 40/2021/TT-BTC"
+                "📎 Căn cứ:\n"
+                "• Nghị quyết 198/2025/QH15 (bãi bỏ thuế khoán + lệ phí môn bài)\n"
+                "• Thông tư 40/2021/TT-BTC (tỷ lệ GTGT/TNCN trên doanh thu)\n\n"
+                "Vui lòng xác nhận với cơ quan thuế nếu có thay đổi pháp luật gần đây."
             )
         else:
             reply = (
@@ -601,7 +688,7 @@ class TaxEngine:
                 conversation_history=history,
                 memory_context=memory_context,
             )
-            if rag_result.confidence > 0.4 and rag_result.answer:
+            if rag_result.confidence > 0.4 and rag_result.answer and rag_result.answer.strip():
                 references = [
                     {"title": s["title"], "url": s.get("url", ""), "snippet": s.get("snippet", "")}
                     for s in rag_result.sources
@@ -646,7 +733,7 @@ class TaxEngine:
                 conversation_history=history,
                 memory_context=memory_context,
             )
-            if rag_result.confidence > 0.4 and rag_result.answer:
+            if rag_result.confidence > 0.4 and rag_result.answer and rag_result.answer.strip():
                 references = [
                     {"title": s["title"], "url": s.get("url", ""), "snippet": s.get("snippet", "")}
                     for s in rag_result.sources
@@ -734,7 +821,7 @@ class TaxEngine:
                 conversation_history=history,
                 memory_context=memory_context,
             )
-            if rag_result.answer:
+            if rag_result.answer and rag_result.answer.strip():
                 references = [
                     {"title": s["title"], "url": s.get("url", ""), "snippet": s.get("snippet", "")}
                     for s in rag_result.sources
@@ -779,7 +866,7 @@ class TaxEngine:
                 conversation_history=history,
                 memory_context=memory_context,
             )
-            if rag_result.confidence > 0.4 and rag_result.answer:
+            if rag_result.confidence > 0.4 and rag_result.answer and rag_result.answer.strip():
                 references = [
                     {"title": s["title"], "url": s.get("url", ""), "snippet": s.get("snippet", "")}
                     for s in rag_result.sources
@@ -897,21 +984,29 @@ class TaxEngine:
         )
 
     def _get_tax_overview(self, customer_type: CustomerType) -> str:
+        # Cập nhật theo Nghị quyết 198/2025/QH15 và Nghị định 362/2025/NĐ-CP:
+        # - Lệ phí môn bài bãi bỏ từ 01/01/2026
+        # - Thuế khoán bãi bỏ từ 01/01/2026 → hộ KD chuyển sang kê khai
         if customer_type in (CustomerType.HOUSEHOLD, CustomerType.INDIVIDUAL):
             return (
-                "Tổng quan thuế cho Hộ kinh doanh / Cá thể:\n\n"
-                "1. Thuế Môn bài: 0 - 1.000.000 VND/năm\n"
-                "2. Thuế GTGT: 1-5% trên doanh thu\n"
-                "3. Thuế TNCN: 0.5-2% trên doanh thu\n"
-                "   (Miễn nếu DT ≤ 100 triệu/năm)\n\n"
+                "Tổng quan thuế cho Hộ kinh doanh / Cá thể (kỳ 2026 trở đi):\n\n"
+                "1. Thuế GTGT: 1-5% trên doanh thu\n"
+                "2. Thuế TNCN: 0,5-2% trên doanh thu\n"
+                "   (Miễn nếu doanh thu ≤ 200 triệu/năm — xác nhận ngưỡng\n"
+                "    hiện hành với cơ quan thuế)\n\n"
+                "⚠️ Thay đổi từ 01/01/2026 (Nghị quyết 198/2025/QH15):\n"
+                "• Lệ phí môn bài: ĐÃ BÃI BỎ\n"
+                "• Thuế khoán: ĐÃ BÃI BỎ — chuyển sang phương pháp KÊ KHAI\n"
+                "  dựa trên doanh thu thực tế\n\n"
                 "Bạn muốn tìm hiểu chi tiết loại thuế nào?"
             )
         return (
-            "Tổng quan thuế cho Doanh nghiệp (SME):\n\n"
-            "1. Thuế Môn bài: 2-3 triệu VND/năm\n"
-            "2. Thuế GTGT: 10% (phương pháp khấu trừ)\n"
-            "3. Thuế TNDN: 20% trên lợi nhuận\n"
-            "4. Thuế TNCN: Khấu trừ cho nhân viên\n\n"
+            "Tổng quan thuế cho Doanh nghiệp (SME) (kỳ 2026 trở đi):\n\n"
+            "1. Thuế GTGT: 10% (phương pháp khấu trừ)\n"
+            "2. Thuế TNDN: 20% trên lợi nhuận\n"
+            "3. Thuế TNCN: Khấu trừ cho nhân viên\n\n"
+            "⚠️ Thay đổi từ 01/01/2026 (Nghị quyết 198/2025/QH15):\n"
+            "• Lệ phí môn bài: ĐÃ BÃI BỎ — DN không phải kê khai/nộp cho năm 2026+\n\n"
             "Bạn muốn tìm hiểu chi tiết loại thuế nào?"
         )
 
@@ -919,7 +1014,7 @@ class TaxEngine:
         self, category: TaxCategory | None, customer_type: CustomerType
     ) -> str:
         return (
-            "Hạn nộp thuế chính:\n\n"
+            "Hạn nộp thuế chính (kỳ 2026 trở đi):\n\n"
             "📅 Thuế GTGT (kê khai tháng):\n"
             "• Hạn: Ngày 20 tháng sau\n\n"
             "📅 Thuế GTGT (kê khai quý):\n"
@@ -928,10 +1023,10 @@ class TaxEngine:
             "• Hạn: Ngày 30 tháng đầu quý sau\n\n"
             "📅 Quyết toán thuế năm:\n"
             "• Hạn: 90 ngày kể từ kết thúc năm tài chính\n\n"
-            "📅 Thuế Môn bài:\n"
-            "• Hạn: Ngày 30/01 hàng năm\n\n"
             "📅 Thuế TNCN (quyết toán):\n"
-            "• Hạn: Trước 31/03 năm sau"
+            "• Hạn: Trước 31/03 năm sau\n\n"
+            "ℹ️ Lệ phí môn bài đã được bãi bỏ từ 01/01/2026\n"
+            "(Nghị quyết 198/2025/QH15) — không còn hạn nộp."
         )
 
     def _build_response(
@@ -941,6 +1036,18 @@ class TaxEngine:
         actions: list[dict] | None = None,
         references: list[dict] | None = None,
     ) -> dict:
+        # Issue #72 defense layer: never let an empty/whitespace reply leave
+        # the engine. Telegram silently rejects empty messages, which is what
+        # the user perceives as the "blank screen" bug.
+        if not reply or not reply.strip():
+            logger.warning(
+                "Empty reply in _build_response: intent=%s category=%s — "
+                "substituting safe fallback",
+                classification.intent.value,
+                classification.tax_category.value if classification.tax_category else "none",
+            )
+            reply = _SAFE_FALLBACK_REPLY
+
         if actions:
             # Already has explicit buttons — don't add suggestion buttons
             all_actions = actions

@@ -120,7 +120,10 @@ class TestTaxDeadline:
         result = await engine.process_message("deadline nộp thuế")
 
         assert "20" in result["reply"]  # Ngày 20 tháng sau
-        assert "30/01" in result["reply"]  # Thuế Môn bài
+        # Test này exercise legacy TaxAdvisor (top-level services/ai/) — chưa
+        # được cập nhật cho Issue #71, nên vẫn còn hạn 30/01 cũ. Test cho
+        # production engine (app.core) ở tests/test_tax_engine.py.
+        assert "30/01" in result["reply"]  # Thuế Môn bài (legacy)
 
 
 class TestDeclaration:

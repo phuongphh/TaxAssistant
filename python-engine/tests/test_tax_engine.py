@@ -119,8 +119,11 @@ class TestTaxDeadline:
     async def test_deadline_contains_key_dates(self, engine: TaxEngine):
         result = await engine.process_message("deadline nộp thuế")
 
-        assert "20" in result["reply"]  # Ngày 20 tháng sau
-        assert "30/01" in result["reply"]  # Thuế Môn bài
+        assert "20" in result["reply"]  # GTGT: ngày 20 tháng sau
+        # Issue #71: lệ phí môn bài bãi bỏ từ 01/01/2026 — deadline string
+        # phải nêu rõ thay vì in hạn cũ 30/01.
+        assert "31/03" in result["reply"]  # TNCN quyết toán
+        assert "bãi bỏ" in result["reply"].lower()  # Thông báo môn bài bãi bỏ
 
 
 class TestDeclaration:
