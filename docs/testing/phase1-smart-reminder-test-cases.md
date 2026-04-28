@@ -318,3 +318,328 @@ CIT tạm tính quý kế).
 - DB: `notification_logs` KHÔNG có row mới
 - Log scheduler: `skipped += 1` cho user này
 - `last_notified_at` không bị update
+
+---
+
+## Section 4 — Personalization theo Profile (Issue 3)
+
+### TC-21 🟢 — `tax_handler='self'` → tin nhắn có hướng dẫn hành động chi tiết
+
+**Tiền điều kiện:** User có `tax_handler='self'`, có deadline urgent.
+
+**Thao tác:** Trigger daily job.
+
+**Kết quả mong đợi:**
+- Tin nhắn có section hướng dẫn từng bước cụ thể, ví dụ:
+  > 💡 Cần có Thông báo thuế khoán từ Chi cục thuế
+  > trước khi nộp. Chưa có? Nhắn 'thuế khoán' để tôi
+  > hướng dẫn.
+- Có CTA dạng "Nhắn '...' để được hướng dẫn"
+
+---
+
+### TC-22 🟢 — `tax_handler='accountant'` → "báo cho kế toán của bạn"
+
+**Tiền điều kiện:** User công ty, có kế toán riêng.
+
+**Thao tác:** Trigger daily job.
+
+**Kết quả mong đợi:**
+- Tin nhắn có dòng:
+  > 💡 Gửi sổ sách tháng này cho kế toán càng sớm càng tốt.
+- Tone ngắn gọn hơn, không có hướng dẫn chi tiết từng bước
+  (vì user đã có kế toán)
+
+---
+
+### TC-23 🟢 — `tax_handler='unknown'` → kèm link hỏi bot trợ giúp
+
+**Tiền điều kiện:** User chọn "Chưa biết phải làm gì 😅".
+
+**Thao tác:** Trigger daily job.
+
+**Kết quả mong đợi:**
+- Tin nhắn kèm CTA động viên hỏi bot:
+  > Chưa rõ phải làm gì? Nhắn 'tôi cần giúp' để mình
+  > hướng dẫn từ đầu.
+- Tone thân thiện, không gây áp lực
+
+---
+
+### TC-24 🟢 — Hộ KD + service → nhắc Thông báo thuế khoán
+
+**Tiền điều kiện:** `business_type='household'`, `industry='service'`.
+
+**Thao tác:** Trigger daily job.
+
+**Kết quả mong đợi:**
+- Tin nhắn có dòng đặc thù cho hộ KD service:
+  > 💡 Cần có Thông báo thuế khoán từ Chi cục thuế
+  > trước khi nộp.
+
+---
+
+### TC-25 🟢 — Công ty (any industry) → nhắc sổ sách đầu vào/đầu ra
+
+**Tiền điều kiện:** `business_type='company'`.
+
+**Thao tác:** Trigger daily job.
+
+**Kết quả mong đợi:**
+- Tin nhắn có dòng:
+  > 💡 Kiểm tra sổ sách đầu vào / đầu ra trước khi
+  > kê khai.
+
+---
+
+### TC-26 🟢 — Cá nhân (any industry) → nhắc lưu chứng từ chi phí
+
+**Tiền điều kiện:** `business_type='individual'`.
+
+**Thao tác:** Trigger daily job.
+
+**Kết quả mong đợi:**
+- Tin nhắn có dòng:
+  > 💡 Nhớ lưu chứng từ chi phí — cuối năm sẽ cần
+  > để quyết toán.
+
+---
+
+### TC-27 🟢 — Format VND đúng cho 3 ngưỡng
+
+**Mục đích:** Verify format `format_vnd` trong message_builder.
+
+**Cách test:**
+- User A có `revenue_snapshot.amount = 850_000` (< 1tr)
+  → Trigger preview → tin nhắn hiện "**850,000 đồng**"
+- User B có `revenue_snapshot.amount = 11_400_000`
+  → Tin nhắn hiện "**11.4 triệu đồng**"
+- User C có `revenue_snapshot.amount = 1_200_000_000`
+  → Tin nhắn hiện "**1.2 tỷ đồng**"
+
+**Kết quả mong đợi:** Định dạng đúng cả 3 ngưỡng,
+KHÔNG hiển thị "11400000.0" hay "11,400,000".
+
+---
+
+## Section 5 — Anti-spam Rules (Issue 4)
+
+### TC-28 🟢 — User vừa nhận tin <20h → skip lần gửi tiếp theo
+
+**Tiền điều kiện:**
+- User đã nhận daily reminder lúc 8:30 sáng nay
+- `last_notified_at = today 08:30`
+
+**Thao tác:** Trigger lại daily job ngay lập tức (cùng ngày,
+hoặc giả lập 19h sau).
+
+**Kết quả mong đợi:**
+- Bot **KHÔNG gửi tin** lần 2
+- Log scheduler: `skipped += 1`
+- `notification_logs` không có row mới
+- `last_notified_at` giữ nguyên
+
+**Verify Acceptance Criteria Issue 4:**
+> "Anti-spam: chạy daily_deadline_check 2 lần liên tiếp →
+> lần 2 gửi 0 tin"
+
+---
+
+### TC-29 🟢 — `notification_enabled=FALSE` → KHÔNG gửi bất kỳ loại nào
+
+**Tiền điều kiện:** User đã `PUT /notifications/settings`
+với `notification_enabled=false`.
+
+**Thao tác:** Trigger cả 3 jobs: daily, weekly, monthly.
+
+**Kết quả mong đợi:**
+- Cả 3 job đều **skip** user này
+- User KHÔNG nhận bất kỳ tin nhắn tự động nào
+- User vẫn có thể chủ động nhắn "lịch thuế" để xem
+  (vì đó là user-initiated, không bị anti-spam chặn)
+
+---
+
+### TC-30 🟢 — User bật notification trở lại → nhận tin lần sau
+
+**Tiền điều kiện:** Vừa hoàn thành TC-29.
+
+**Thao tác:**
+1. Nhắn `bật thông báo` (Node gateway gọi
+   `PUT /notifications/settings` với
+   `notification_enabled=true`)
+2. Đợi đến daily job tiếp theo
+
+**Kết quả mong đợi:**
+- Bot xác nhận:
+  > ✅ Đã bật lại thông báo. Bạn sẽ nhận lịch nhắc
+  > lúc 8:30 mỗi sáng.
+- Daily job kế tiếp gửi tin bình thường
+
+---
+
+### TC-31 🔴 — Gửi thất bại 3 lần → log error, KHÔNG retry vô hạn
+
+**Tiền điều kiện:** User đã block bot trên Telegram
+(API trả 403 "Forbidden: bot was blocked").
+
+**Thao tác:** Trigger daily job.
+
+**Kết quả mong đợi:**
+- Scheduler retry lần 1 sau 5 phút → fail
+- Retry lần 2 sau 5 phút → fail
+- Lần 3 → log ERROR
+- DB: `notification_logs` có row với `was_delivered=FALSE`
+- Job vẫn tiếp tục xử lý các user khác (KHÔNG crash)
+- Sau lần 3, scheduler **KHÔNG retry thêm** trong job này
+
+---
+
+## Section 6 — Weekly Summary (Issue 4)
+
+### TC-32 🟢 — Thứ Hai 9:00 — active user nhận summary
+
+**Tiền điều kiện:**
+- Hôm nay là thứ Hai
+- User đã onboarding xong
+- `last_active_at` trong vòng 90 ngày qua
+
+**Thao tác:** Đợi đến 9:00 thứ Hai (hoặc trigger thủ công
+job `weekly_summary`).
+
+**Kết quả mong đợi:**
+- Bot gửi tin nhắn dạng:
+  > 📊 Tuần này của [Tên]:
+  > • Doanh thu ghi nhận: ...
+  > • Thuế GTGT ước tính: ...
+  > • Deadline còn lại trong tháng: ...
+- Có ít nhất 1 "tip thuế tuần này" (xoay vòng theo chủ đề)
+- Anti-spam vẫn được tôn trọng (nếu đã nhận tin <20h
+  thì skip)
+
+---
+
+### TC-33 🟡 — Inactive user (>90 ngày) → KHÔNG nhận weekly summary
+
+**Tiền điều kiện:** User có `last_active_at` cách đây 100 ngày.
+
+**Thao tác:** Trigger weekly_summary job.
+
+**Kết quả mong đợi:**
+- Bot **KHÔNG gửi** weekly summary cho user này
+- Log: `skipped += 1`
+
+---
+
+### TC-34 🟡 — Tuần không có deadline nào → chỉ tip thuế
+
+**Tiền điều kiện:** User active, nhưng tháng này không có
+deadline nào sắp đến.
+
+**Thao tác:** Trigger weekly_summary thứ Hai.
+
+**Kết quả mong đợi:**
+- Tin nhắn vẫn được gửi
+- Section "Deadline còn lại": "Không có deadline trong
+  tuần này"
+- Vẫn có "tip thuế tuần này" để giữ engagement
+- Người dùng có lý do mở bot (Trụ cột Proactive Value)
+
+---
+
+## Section 7 — Monthly Calendar (Issue 4)
+
+### TC-35 🟢 — Ngày 1 hàng tháng 8:00 — nhận lịch tháng
+
+**Tiền điều kiện:** Hôm nay là ngày 1 của tháng.
+
+**Thao tác:** Đợi 8:00 sáng (hoặc trigger
+`monthly_calendar` job thủ công).
+
+**Kết quả mong đợi:**
+- Bot gửi tin nhắn:
+  > 📋 Tháng này bạn có {N} nghĩa vụ thuế cần lưu ý...
+- Liệt kê đầy đủ deadline trong tháng đó với ngày cụ thể
+- Đúng theo profile user (hộ KD chỉ thấy thuế khoán,
+  công ty thấy VAT+CIT, v.v.)
+
+---
+
+### TC-36 🟡 — Tháng 2 (28 ngày) — không crash khi tính deadline
+
+**Tiền điều kiện:** Hôm nay 01/02 (năm không nhuận, tháng có 28 ngày).
+
+**Thao tác:** Trigger `monthly_calendar` job.
+
+**Kết quả mong đợi:**
+- Job chạy thành công, KHÔNG ném exception
+- Deadline 28/02 được tính đúng (không bị tràn sang tháng 3)
+- Tin nhắn gửi đúng định dạng
+
+**Verify Acceptance Criteria Issue 2:**
+> "Xử lý được edge case tháng 2 (28/29 ngày)"
+
+---
+
+### TC-37 🟡 — Cuối tháng 12 — deadline phải sang năm sau
+
+**Tiền điều kiện:** Hôm nay là 28/12/2026.
+
+**Thao tác:** Gửi `lịch thuế` hoặc trigger preview.
+
+**Kết quả mong đợi:**
+- Deadline tiếp theo (ngày 30/01/2027 hoặc 20/01/2027)
+  được tính sang **năm 2027**
+- Label hiển thị đúng "Q1/2027" hoặc "tháng 12/2026" tùy loại
+- KHÔNG có lỗi off-by-one năm
+
+**Verify Acceptance Criteria Issue 2:**
+> "Xử lý deadline năm sau khi reference_date là cuối tháng 12"
+
+---
+
+## Section 8 — Notification Settings (Issue 6 — PUT)
+
+### TC-38 🟢 — User tắt notification
+
+**Thao tác:**
+1. Trong chat bot, nhắn `tắt thông báo`
+   (hoặc qua nút settings inline keyboard)
+2. Node gateway gọi `PUT /notifications/settings/{telegram_id}`
+   với body `{"notification_enabled": false}`
+
+**Kết quả mong đợi:**
+- API trả `200` `{"updated": true}`
+- DB: `notification_enabled=FALSE`
+- Bot xác nhận:
+  > 🔕 Đã tắt thông báo. Nhắn 'bật thông báo' khi
+  > muốn bật lại.
+
+---
+
+### TC-39 🟢 — User đổi giờ nhắc thành 7:30 sáng
+
+**Thao tác:**
+1. Nhắn `đổi giờ nhắc 7:30`
+2. Node gateway gọi `PUT /notifications/settings` với
+   `{"preferred_notify_hour": 7, "preferred_notify_minute": 30}`
+
+**Kết quả mong đợi:**
+- DB: `preferred_notify_hour=7`, `preferred_notify_minute=30`
+- Bot xác nhận:
+  > ⏰ Đã đổi giờ nhắc thành 7:30 sáng (Asia/Ho_Chi_Minh).
+- Daily job kế tiếp gửi đúng vào 7:30 thay vì 8:30 mặc định
+
+---
+
+### TC-40 🔴 — Input giờ không hợp lệ (25:00) → reject
+
+**Thao tác:** Gửi request
+`PUT /notifications/settings` với body
+`{"preferred_notify_hour": 25}`.
+
+**Kết quả mong đợi:**
+- API trả `422 Unprocessable Entity` (Pydantic validation)
+- DB KHÔNG bị thay đổi
+- Bot phản hồi user:
+  > ❌ Giờ không hợp lệ. Vui lòng nhập giờ từ 0–23.
