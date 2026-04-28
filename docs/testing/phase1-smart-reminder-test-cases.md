@@ -643,3 +643,308 @@ deadline nào sắp đến.
 - DB KHÔNG bị thay đổi
 - Bot phản hồi user:
   > ❌ Giờ không hợp lệ. Vui lòng nhập giờ từ 0–23.
+
+---
+
+## Section 9 — Edge Cases & Robustness
+
+### TC-41 🟡 — User đổi `business_type` → deadline được recalc
+
+**Tiền điều kiện:** User đang là `household`, sau đó đổi
+sang `company` (qua nhắn "cập nhật hồ sơ" hoặc admin cập nhật DB).
+
+**Thao tác:**
+1. Đổi `business_type='company'`, `tax_period='monthly'`
+2. Gửi `lịch thuế`
+
+**Kết quả mong đợi:**
+- Deadline list được tính lại theo profile mới
+- Hiển thị VAT tháng + CIT tạm tính (thay vì thuế khoán)
+- KHÔNG còn deadline "Thuế khoán" cũ
+- DB không bị duplicate row
+
+---
+
+### TC-42 🔴 — User block bot trên Telegram → mark error, không crash job
+
+**Tiền điều kiện:** User block bot, Telegram API trả về
+`403 Forbidden: bot was blocked by the user`.
+
+**Thao tác:** Trigger daily job có user này trong batch.
+
+**Kết quả mong đợi:**
+- Sau 3 lần retry fail → log ERROR
+- DB: `notification_logs` có row với
+  `was_delivered=FALSE`
+- Job vẫn xử lý các user còn lại, **KHÔNG crash**
+- Khuyến nghị: cân nhắc set `notification_enabled=FALSE`
+  cho user này để không spam log nữa (improvement)
+
+---
+
+### TC-43 🟡 — User chưa có `revenue_snapshots` → `estimated_amount=None`
+
+**Tiền điều kiện:** User mới, chưa nhập doanh thu lần nào.
+
+**Thao tác:** Trigger daily job khi có deadline urgent.
+
+**Kết quả mong đợi:**
+- API `GET /notifications/upcoming` vẫn trả deadline,
+  nhưng `estimated_amount: null`
+- Tin nhắn KHÔNG hiển thị dòng "💰 Ước tính: ..."
+- Thay vào đó có CTA:
+  > 📝 Mình chưa biết doanh thu của bạn. Nhắn 'báo doanh thu'
+  > để mình tính giúp số thuế ước tính.
+
+**Verify Acceptance Criteria Issue 2:**
+> "Return `None` nếu không đủ dữ liệu"
+
+---
+
+### TC-44 🟢 — User reply tin nhắn notification → log `user_replied=TRUE`
+
+**Tiền điều kiện:** User vừa nhận daily reminder.
+
+**Thao tác:** User reply tin nhắn đó (ví dụ nhắn
+"đã nộp" hoặc "tính phạt giúp tôi") trong vòng 24 giờ.
+
+**Kết quả mong đợi:**
+- DB: `notification_logs.user_replied=TRUE`
+- DB: `notification_logs.reply_within_hours` = số giờ
+  từ `sent_at` đến lúc reply
+- Đây là input cho metrics
+  "Notification → Interaction rate > 25%"
+
+---
+
+### TC-45 🟡 — Tin nhắn dài → không vượt 4,096 ký tự
+
+**Tiền điều kiện:** User có 8+ deadline trong 60 ngày,
+profile dài (tên cửa hàng dài, tỉnh dài, v.v.).
+
+**Thao tác:** Trigger `monthly_calendar` job.
+
+**Kết quả mong đợi:**
+- Tin nhắn gửi qua Telegram thành công (không bị
+  Telegram reject vì quá độ dài)
+- Nếu nội dung quá dài: truncate hoặc chia thành nhiều tin
+- Vẫn giữ phần quan trọng nhất (deadline gần nhất)
+
+**Verify Acceptance Criteria Issue 3:**
+> "Output không vượt 4,096 ký tự trong mọi trường hợp"
+
+---
+
+### TC-46 🟢 — Restart Docker container → scheduler tự khởi động, không duplicate job
+
+**Thao tác:**
+```
+docker compose restart tax-engine
+# Đợi container up
+curl http://localhost:8000/notifications/scheduler/status
+```
+
+**Kết quả mong đợi:**
+- Endpoint trả `scheduler_running: true`
+- Có đúng **3 jobs**: `daily_deadline_check`,
+  `weekly_summary`, `monthly_calendar`
+- KHÔNG có job duplicate (ví dụ 2 daily_deadline_check)
+- `next_run` của mỗi job hiển thị đúng theo timezone
+  `Asia/Ho_Chi_Minh`
+
+**Verify Acceptance Criteria Issue 4:**
+> "Restart Docker container → scheduler tự start,
+> không duplicate jobs"
+
+---
+
+### TC-47 🟡 — Năm nhuận, ngày 29/02 — không crash
+
+**Tiền điều kiện:** Hôm nay 29/02/2028 (năm nhuận).
+
+**Thao tác:** Trigger tất cả 3 jobs.
+
+**Kết quả mong đợi:**
+- Tất cả jobs chạy thành công
+- Deadline tính ra (ví dụ 30/03 cho thuế khoán Q1)
+  đúng theo lịch
+- Không có lỗi `ValueError: day is out of range for month`
+
+---
+
+### TC-48 🟢 — `has_employees=TRUE` → có nhắc PIT withholding cho công ty
+
+**Tiền điều kiện:** Công ty `business_type='company'`,
+`has_employees=TRUE`.
+
+**Thao tác:** Trigger daily job hoặc gửi `lịch thuế`.
+
+**Kết quả mong đợi:**
+- Tin nhắn có deadline thêm: "PIT khấu trừ nhân viên"
+- Có gợi ý:
+  > 💡 Đừng quên kê khai PIT cho nhân viên trong tháng.
+- Nếu `has_employees=FALSE`: KHÔNG hiện section này
+
+---
+
+### TC-49 🔴 — Nội dung có ký tự đặc biệt → Markdown Telegram không bị lỗi
+
+**Tiền điều kiện:** Tên cửa hàng user chứa ký tự đặc biệt
+như `*`, `_`, `[`, `]`, `(`, `)`, ví dụ "Quán *Hoa Mai*".
+
+**Thao tác:** Trigger daily job — tin nhắn nhúng tên này
+qua Markdown.
+
+**Kết quả mong đợi:**
+- Telegram render đúng — KHÔNG bị break formatting
+  (escape `*` thành `\*`, v.v.)
+- KHÔNG bị Telegram trả lỗi `400 Bad Request: can't parse
+  entities`
+- Tin nhắn vẫn được gửi thành công
+
+**Verify CLAUDE.md:**
+> "Sử dụng Markdown hợp lệ cho Telegram, không dùng HTML tags"
+
+---
+
+### TC-50 🟡 — Concurrent: scheduler chạy chồng (overlapping) → không gửi duplicate
+
+**Tiền điều kiện:** Daily job cũ chưa kết thúc (đang xử lý
+1000 user) thì đến giờ trigger lần kế tiếp (rất hiếm,
+nhưng có thể nếu 1 job chạy quá 24h vì lỗi).
+
+**Thao tác:** Giả lập bằng cách trigger thủ công 2 lần
+liên tiếp `POST /notifications/test/{telegram_id}`
+(nhưng test endpoint này KHÔNG check anti-spam, nên cần
+test với daily job thật).
+
+**Kết quả mong đợi:**
+- Anti-spam check (`last_notified_at < NOW() - 20h`)
+  ngăn việc gửi tin trùng
+- User chỉ nhận **1 tin** dù job chạy 2 lần
+- APScheduler config `max_instances=1` cho mỗi job
+  (best practice — verify khi review code)
+
+---
+
+### TC-51 🟢 — Endpoint `GET /notifications/scheduler/status` ngay khi vừa start
+
+**Tiền điều kiện:** Tax-engine vừa start, chưa có job
+nào chạy lần nào.
+
+**Thao tác:** `curl http://localhost:8000/notifications/scheduler/status`
+
+**Kết quả mong đợi:**
+- Trả `200` với:
+  ```json
+  {
+    "scheduler_running": true,
+    "jobs": [
+      {
+        "id": "daily_deadline_check",
+        "next_run": "<future ISO timestamp>",
+        "last_run": null,
+        "last_run_sent": null,
+        "last_run_skipped": null,
+        "last_run_failed": null
+      },
+      ...
+    ]
+  }
+  ```
+- KHÔNG crash khi `last_run` là `null`
+
+**Verify Acceptance Criteria Issue 6:**
+> "Endpoint scheduler/status hoạt động kể cả khi
+> scheduler chưa chạy job nào"
+
+---
+
+### TC-52 🔴 — `POST /notifications/test/{telegram_id}` bị block khi `ENV=production`
+
+**Tiền điều kiện:** Tax-engine chạy với env `ENV=production`.
+
+**Thao tác:** `curl -X POST http://prod/notifications/test/123456`
+
+**Kết quả mong đợi:**
+- Trả `403 Forbidden`
+  `{"detail": "Not available in production"}`
+- KHÔNG có tin nhắn nào được gửi
+- Log warning để admin biết có người thử endpoint này
+
+**Verify Acceptance Criteria Issue 6:**
+> "Test endpoint bị block hoàn toàn khi ENV=production"
+
+---
+
+### TC-53 🟢 — Aha Moment Ngày 1: Sau onboarding, nhận lịch thuế ngay
+
+**Tham chiếu:** Phần 7 retention-strategy.md — Aha Moment Ngày 1.
+
+**Thao tác:** User mới đăng ký, hoàn thành cả step 1 + 2.
+
+**Kết quả mong đợi:**
+- **Trong vòng 30 giây** sau onboarding hoàn thành,
+  user nhận tin nhắn lịch thuế cá nhân hóa
+  (qua `POST /notifications/preview/{telegram_id}`)
+- Tin nhắn có ít nhất 1 deadline cụ thể với ngày
+- Đây là **aha moment đầu tiên** — nếu thiếu sẽ ảnh hưởng
+  D1 retention
+
+---
+
+### TC-54 🟢 — Aha Moment Ngày 7: Nhận daily reminder đầu tiên
+
+**Tiền điều kiện:** User đăng ký ngày 1, đến ngày 7.
+
+**Thao tác:** Đợi đến 8:30 sáng ngày 7 (hoặc đổi
+`preferred_notify_hour`).
+
+**Kết quả mong đợi:**
+- User nhận daily reminder đầu tiên không phải do họ
+  yêu cầu (proactive)
+- Đây là khoảnh khắc xác nhận giá trị "không quên deadline"
+- Verify metric: `notification_open_rate > 60%`
+
+---
+
+### TC-55 🟡 — `last_notified_at` được update chính xác sau gửi
+
+**Thao tác:**
+1. Trước job: `SELECT last_notified_at FROM user_profiles
+   WHERE telegram_id={X};` → giả sử là `2026-04-27 08:30`
+2. Trigger daily job lúc 2026-04-28 08:30
+3. Kiểm tra lại `last_notified_at`
+
+**Kết quả mong đợi:**
+- Giá trị mới = thời điểm gửi thành công
+  (`2026-04-28 08:30:xx`)
+- Múi giờ: `Asia/Ho_Chi_Minh` (KHÔNG phải UTC)
+- Nếu gửi fail (TC-31): `last_notified_at` KHÔNG update
+
+---
+
+## Phụ lục — Mapping Test Case ↔ Issue
+
+| Issue | Test Cases liên quan |
+|---|---|
+| Issue 1 — DB Schema | TC-01, TC-02, TC-44 (qua DB verification) |
+| Issue 2 — Deadline Calculator | TC-09 → TC-14, TC-36, TC-37, TC-43, TC-47 |
+| Issue 3 — Message Builder | TC-15 → TC-19, TC-21 → TC-27, TC-45, TC-49 |
+| Issue 4 — Scheduler | TC-15 → TC-20, TC-28 → TC-37, TC-46, TC-50, TC-55 |
+| Issue 5 — Onboarding | TC-01 → TC-08 |
+| Issue 6 — REST API | TC-09 → TC-14, TC-38 → TC-40, TC-51, TC-52 |
+
+## Phụ lục — Mapping Test Case ↔ Trụ cột Retention
+
+| Trụ cột | Test Cases liên quan |
+|---|---|
+| Trụ cột 1 — Proactive Value | TC-15 → TC-20, TC-32 → TC-37, TC-53, TC-54 |
+| Trụ cột 2 — Daily Value | TC-32 → TC-34 (weekly summary) |
+| Trụ cột 3 — Personalization & Switching Cost | TC-21 → TC-27, TC-41, TC-43, TC-44, TC-48 |
+
+---
+
+*File này là living document — cập nhật khi có feature mới
+hoặc bug pattern phát hiện trong production.*
+*Version 1.0 — 2026-04*
