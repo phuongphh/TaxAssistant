@@ -196,8 +196,22 @@ export class MessageRouter {
       );
 
       // 7. Build reply
+      // Issue #72 defense layer: Telegram silently rejects empty messages,
+      // so if the engine returned a blank reply we substitute a fallback
+      // instead of leaving the user staring at a blank screen.
+      const rawReplyText = engineResponse?.reply ?? '';
+      const replyText = rawReplyText.trim()
+        ? rawReplyText
+        : 'Xin lỗi, tôi chưa hiểu rõ yêu cầu. Vui lòng thử lại với câu hỏi cụ thể, ví dụ: "tính thuế GTGT doanh thu 500 triệu".';
+      if (!rawReplyText.trim()) {
+        logger.error('Engine returned empty reply — substituting fallback', {
+          requestId,
+          userId: message.userId,
+          intent: (engineResponse as any)?.intent,
+        });
+      }
       const reply: OutgoingMessage = {
-        text: engineResponse?.reply ?? '',
+        text: replyText,
         quickReplies: engineResponse?.actions
           ?.filter((a) => a.actionType === 'quick_reply')
           .map((a) => ({ label: a.label, payload: a.payload })),

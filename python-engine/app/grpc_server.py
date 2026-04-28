@@ -384,9 +384,24 @@ class TaxEngineServicer(pb2_grpc.TaxEngineServicer):
             for r in result.get("references", [])
         ]
 
+        # Issue #72 defense layer: never let an empty reply reach the gateway.
+        # Telegram silently drops empty messages, which is what users perceive
+        # as the "blank screen" bug. If the engine somehow produced an empty
+        # reply, log it loudly and substitute a safe fallback.
+        reply_text = (result.get("reply") or "").strip()
+        if not reply_text:
+            logger.error(
+                "EMPTY_REPLY: request_id=%s intent=%s — substituting fallback",
+                request.request_id, result.get("intent", "?"),
+            )
+            reply_text = (
+                "Xin lỗi, tôi chưa hiểu rõ yêu cầu của bạn. Vui lòng thử lại "
+                "với câu hỏi cụ thể, ví dụ: \"tính thuế GTGT doanh thu 500 triệu\"."
+            )
+
         return pb2.TaxResponse(
             request_id=request.request_id,
-            reply=result.get("reply", ""),
+            reply=reply_text,
             actions=actions,
             references=references,
             confidence=result.get("confidence", 0.0),

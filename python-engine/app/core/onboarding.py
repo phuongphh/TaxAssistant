@@ -254,7 +254,9 @@ class OnboardingHandler:
             "Bạn đang kê khai thuế theo kỳ nào?\n\n"
             "1. Hàng tháng (doanh thu > 50 triệu/tháng)\n"
             "2. Hàng quý (doanh thu < 50 triệu/tháng)\n"
-            "3. Thuế khoán cố định (hộ kinh doanh nhỏ)\n"
+            "3. Trước đây dùng thuế khoán (hộ KD nhỏ)\n"
+            "   ⚠️ Lưu ý: thuế khoán đã bãi bỏ từ 01/01/2026 — bạn cần\n"
+            "   chuyển sang kê khai (Nghị quyết 198/2025/QH15).\n"
             "4. Chưa biết / Để hỏi sau"
         )
 
@@ -263,7 +265,7 @@ class OnboardingHandler:
             "actions": [
                 {"label": "Hàng tháng", "action_type": "quick_reply", "payload": "1"},
                 {"label": "Hàng quý", "action_type": "quick_reply", "payload": "2"},
-                {"label": "Thuế khoán", "action_type": "quick_reply", "payload": "3"},
+                {"label": "Khoán cũ → kê khai", "action_type": "quick_reply", "payload": "3"},
                 {"label": "Chưa biết", "action_type": "quick_reply", "payload": "4"},
             ],
             "update_fields": update_fields,
@@ -278,7 +280,9 @@ class OnboardingHandler:
             "Bạn đang kê khai thuế theo kỳ nào?\n\n"
             "1. Hàng tháng (doanh thu > 50 triệu/tháng)\n"
             "2. Hàng quý (doanh thu < 50 triệu/tháng)\n"
-            "3. Thuế khoán cố định (hộ kinh doanh nhỏ)\n"
+            "3. Trước đây dùng thuế khoán (hộ KD nhỏ)\n"
+            "   ⚠️ Lưu ý: thuế khoán đã bãi bỏ từ 01/01/2026 — bạn cần\n"
+            "   chuyển sang kê khai (Nghị quyết 198/2025/QH15).\n"
             "4. Chưa biết / Để hỏi sau"
         )
         return {
@@ -286,7 +290,7 @@ class OnboardingHandler:
             "actions": [
                 {"label": "Hàng tháng", "action_type": "quick_reply", "payload": "1"},
                 {"label": "Hàng quý", "action_type": "quick_reply", "payload": "2"},
-                {"label": "Thuế khoán", "action_type": "quick_reply", "payload": "3"},
+                {"label": "Khoán cũ → kê khai", "action_type": "quick_reply", "payload": "3"},
                 {"label": "Chưa biết", "action_type": "quick_reply", "payload": "4"},
             ],
             "update_fields": {"onboarding_step": "collecting_tax_period"},
@@ -328,13 +332,13 @@ class OnboardingHandler:
                     "Xin lỗi, tôi chưa hiểu. Vui lòng chọn:\n\n"
                     "1. Hàng tháng\n"
                     "2. Hàng quý\n"
-                    "3. Thuế khoán cố định\n"
+                    "3. Trước đây dùng khoán (đã bãi bỏ từ 2026)\n"
                     "4. Chưa biết / Để hỏi sau"
                 ),
                 "actions": [
                     {"label": "Hàng tháng", "action_type": "quick_reply", "payload": "1"},
                     {"label": "Hàng quý", "action_type": "quick_reply", "payload": "2"},
-                    {"label": "Thuế khoán", "action_type": "quick_reply", "payload": "3"},
+                    {"label": "Khoán cũ → kê khai", "action_type": "quick_reply", "payload": "3"},
                     {"label": "Chưa biết", "action_type": "quick_reply", "payload": "4"},
                 ],
                 "update_fields": {},
