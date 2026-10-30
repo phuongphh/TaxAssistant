@@ -1,0 +1,53 @@
+name: Product CI
+on:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: product-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  engine-unit:
+    name: engine-unit
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: python-engine
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: python-engine/requirements.txt
+      - run: python -m pip install -r requirements.txt
+      - name: Existing engine unit tests
+        run: python -m pytest tests/unit --import-mode=importlib -q --junitxml=unit-results.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: engine-unit-results
+          path: python-engine/unit-results.xml
+          if-no-files-found: error
+  gateway-unit:
+    name: gateway-unit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: node-gateway
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm ci --ignore-scripts
+      - run: npm test -- --reporter=default --reporter=junit --outputFile=unit-results.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gateway-unit-results
+          path: node-gateway/unit-results.xml
+          if-no-files-found: error
