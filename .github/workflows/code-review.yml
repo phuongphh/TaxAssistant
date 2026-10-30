@@ -26,7 +26,10 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install -r requirements.txt
+          pip install "anthropic==1.17.0" requests
+
+      - name: Test reviewer response handling without API calls
+        run: python -m unittest discover -s .github/tests -p "test_*.py"
 
       - name: Run Code Review
         env:

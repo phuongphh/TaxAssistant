@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - "claude/**"
+      # Local task PRs belong to the shared controller.
+      - "!claude/local-issue-*"
+      - "!codex/local-issue-*"
 
 permissions:
   contents: write
