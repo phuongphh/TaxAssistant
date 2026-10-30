@@ -92,7 +92,7 @@ pr_context += f"\n---\n{filtered_diff}"
 response = client.messages.create(
     model="claude-haiku-4-5-20251001",
     max_tokens=300,
-    temperature=0,
+    extra_body={"temperature": 0},
     system=SYSTEM_PROMPT,
     messages=[
         {
@@ -121,5 +121,4 @@ if GITHUB_TOKEN and PR_NUMBER and REPO:
     except Exception as e:
         print(f"Warning: Could not post PR comment: {e}")
 
-if result.startswith("FAIL"):
-    sys.exit(1)
+sys.exit(0 if result == "PASS" else 1)

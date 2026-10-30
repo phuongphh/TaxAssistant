@@ -44,7 +44,11 @@ jobs:
         with:
           node-version: '20'
       - run: npm ci --ignore-scripts
-      - run: npm test -- --reporter=default --reporter=junit --outputFile=unit-results.xml
+      - name: Existing gateway unit tests with placeholder configuration
+        env:
+          NODE_ENV: development
+          TELEGRAM_BOT_TOKEN: ci-placeholder
+        run: npm test -- --reporter=default --reporter=junit --outputFile=unit-results.xml
       - uses: actions/upload-artifact@v4
         if: always()
         with:
